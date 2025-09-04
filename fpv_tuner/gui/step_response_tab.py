@@ -1,6 +1,6 @@
 import os
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QComboBox, QLabel
+    QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QComboBox, QLabel, QDoubleSpinBox, QFormLayout
 )
 import pyqtgraph as pg
 from fpv_tuner.analysis.step_response import find_step_responses
@@ -20,41 +20,55 @@ class StepResponseTab(QWidget):
         self.current_step_index = -1
 
         main_layout = QVBoxLayout(self)
-        controls_layout = QHBoxLayout()
-        main_layout.addLayout(controls_layout)
 
+        # --- Controls Layout ---
+        controls_container = QWidget()
+        controls_layout = QHBoxLayout(controls_container)
+        main_layout.addWidget(controls_container)
+
+        # --- Plot Widget ---
         self.plot_widget = pg.PlotWidget(title="Step Response")
         self.plot_widget.addLegend()
         self.plot_widget.setDownsampling(auto=True, mode='peak')
         self.plot_widget.setClipToView(True)
         main_layout.addWidget(self.plot_widget)
 
-        controls_layout.addWidget(QLabel("Log File:"))
+        # --- Controls ---
+        # Left side controls
+        form_layout = QFormLayout()
         self.log_combo = QComboBox()
-        self.log_combo.currentTextChanged.connect(self.on_log_selection_change)
-        controls_layout.addWidget(self.log_combo)
-
-        controls_layout.addWidget(QLabel("Axis:"))
         self.axis_combo = QComboBox()
         self.axis_combo.addItems(self.AXES_MAP.keys())
-        self.axis_combo.currentTextChanged.connect(self.analyze_axis)
-        controls_layout.addWidget(self.axis_combo)
+        self.threshold_spinbox = QDoubleSpinBox()
+        self.threshold_spinbox.setRange(50, 1000)
+        self.threshold_spinbox.setValue(400)
+        self.threshold_spinbox.setSingleStep(25)
+        self.threshold_spinbox.setSuffix(" (Threshold)")
+        form_layout.addRow("Log File:", self.log_combo)
+        form_layout.addRow("Axis:", self.axis_combo)
+        form_layout.addRow("Sensitivity:", self.threshold_spinbox)
+        controls_layout.addLayout(form_layout)
 
+        # Right side navigation
+        nav_layout = QHBoxLayout()
         self.prev_button = QPushButton("<< Previous")
-        self.prev_button.clicked.connect(self.prev_step)
-        controls_layout.addWidget(self.prev_button)
-
         self.step_label = QLabel("No steps found")
-        controls_layout.addWidget(self.step_label)
-
         self.next_button = QPushButton("Next >>")
-        self.next_button.clicked.connect(self.next_step)
-        controls_layout.addWidget(self.next_button)
+        nav_layout.addWidget(self.prev_button)
+        nav_layout.addWidget(self.step_label)
+        nav_layout.addWidget(self.next_button)
+        controls_layout.addLayout(nav_layout)
         controls_layout.addStretch()
+
+        # --- Connections ---
+        self.log_combo.currentTextChanged.connect(self.on_log_selection_change)
+        self.axis_combo.currentTextChanged.connect(self.analyze_axis)
+        self.threshold_spinbox.valueChanged.connect(self.analyze_axis)
+        self.prev_button.clicked.connect(self.prev_step)
+        self.next_button.clicked.connect(self.next_step)
 
     def set_data(self, logs):
         self.logs = logs
-
         self.log_combo.blockSignals(True)
         self.log_combo.clear()
         self.log_combo.addItems([os.path.basename(p) for p in self.logs.keys()])
@@ -76,7 +90,6 @@ class StepResponseTab(QWidget):
     def analyze_axis(self):
         self.current_step_index = -1
         self.steps = []
-
         if not self.current_log_path or self.current_log_path not in self.logs:
             self.update_plot()
             return
@@ -85,13 +98,13 @@ class StepResponseTab(QWidget):
         axis = self.axis_combo.currentText()
         rc_col = self._find_column(log_data, [self.AXES_MAP[axis]["rc"]])
         time_col = self._find_column(log_data, ['time (us)', 'time'])
+        threshold = self.threshold_spinbox.value()
 
         if rc_col and time_col:
-            self.steps = find_step_responses(log_data[rc_col], log_data[time_col])
+            self.steps = find_step_responses(log_data[rc_col], log_data[time_col], threshold=threshold)
 
         if self.steps:
             self.current_step_index = 0
-
         self.update_plot()
 
     def prev_step(self):
@@ -106,9 +119,8 @@ class StepResponseTab(QWidget):
 
     def update_plot(self):
         self.plot_widget.clear()
-
         if self.current_step_index == -1:
-            self.step_label.setText("No steps found")
+            self.step_label.setText(f"No steps found (Threshold: {self.threshold_spinbox.value()})")
             self.prev_button.setEnabled(False)
             self.next_button.setEnabled(False)
             return
@@ -119,31 +131,25 @@ class StepResponseTab(QWidget):
         self.next_button.setEnabled(self.current_step_index < len(self.steps) - 1)
 
         start, step_idx, end = self.steps[self.current_step_index]
-
         axis = self.axis_combo.currentText()
         cols = self.AXES_MAP[axis]
+        time_us_col = self._find_column(log_data, ['time (us)', 'time'])
+        if time_us_col is None: return
 
-        time_us = self._find_column(log_data, ['time (us)', 'time'])
-        if time_us is None: return
-        time_s = log_data[time_us] / 1_000_000
-
+        time_s = log_data[time_us_col] / 1_000_000
         self.plot_widget.addItem(pg.InfiniteLine(pos=time_s.iloc[step_idx], angle=90, movable=False, pen='gray'))
-
         data_window = log_data.iloc[start:end]
         time_window = time_s.iloc[start:end]
 
         setpoint_col = self._find_column(log_data, [cols["setpoint"]])
         gyro_col = self._find_column(log_data, [cols["gyro"]])
-        dterm_col = self._find_column(log_data, cols["dterm"]) # Corrected call
+        dterm_col = self._find_column(log_data, cols["dterm"])
 
-        if setpoint_col:
-            self.plot_widget.plot(time_window, data_window[setpoint_col], pen='c', name='Setpoint')
-        if gyro_col:
-            self.plot_widget.plot(time_window, data_window[gyro_col], pen='y', name='Gyro')
-        if dterm_col:
-            self.plot_widget.plot(time_window, data_window[dterm_col], pen='m', name='D-Term')
+        if setpoint_col: self.plot_widget.plot(time_window, data_window[setpoint_col], pen='c', name='Setpoint')
+        if gyro_col: self.plot_widget.plot(time_window, data_window[gyro_col], pen='y', name='Gyro')
+        if dterm_col: self.plot_widget.plot(time_window, data_window[dterm_col], pen='m', name='D-Term')
 
-    def _find__column(self, df, possible_names):
+    def _find_column(self, df, possible_names):
         for name in possible_names:
             if name in df.columns:
                 return name
