@@ -122,15 +122,27 @@ def _decode_blackbox_log(file_path):
 
 def _load_csv_log(file_path):
     """
-    Loads a Blackbox CSV log file into a pandas DataFrame.
+    Loads a Blackbox CSV log file into a pandas DataFrame, intelligently
+    detecting if the first line is a metadata header.
     """
     try:
         if not os.path.exists(file_path) or os.path.getsize(file_path) == 0:
             print(f"Warning: CSV file is empty or does not exist: {file_path}")
             return None
 
-        # The real header is on the second line (index 1)
-        df = pd.read_csv(file_path, header=1, index_col=False, low_memory=False, on_bad_lines='warn')
+        # Inspect the first line to decide which header row to use.
+        with open(file_path, 'r', encoding='utf-8') as f:
+            first_line = f.readline()
+
+        header_row = 0
+        # Betaflight logs often start with "H " for the metadata line
+        if first_line.strip().startswith('H '):
+            print("Detected metadata header line. Using second line as header.")
+            header_row = 1
+        else:
+            print("No metadata header detected. Using first line as header.")
+
+        df = pd.read_csv(file_path, header=header_row, index_col=False, low_memory=False, on_bad_lines='warn')
         df.columns = df.columns.str.strip()
 
         print(f"Successfully loaded {os.path.basename(file_path)}")
