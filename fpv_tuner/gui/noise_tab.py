@@ -8,13 +8,24 @@ from fpv_tuner.analysis.noise import calculate_psd
 
 class NoiseTab(QWidget):
     DATA_SOURCES = {
-        "Gyro (Raw)": {"cols": ['gyroADC[0]', 'gyroADC[1]', 'gyroADC[2]'], "legend": "Gyro (Raw)"},
-        "Gyro (Filtered)": {"cols": ['gyroData[0]', 'gyroData[1]', 'gyroData[2]'], "legend": "Gyro (Filtered)"},
-        "D-Term": {"cols": ['dTerm[0]', 'dTerm[1]', 'dTerm[2]'], "legend": "D-Term"}
+        "Gyro (Raw)": {
+            "roll": ['gyroADC[0]', 'gyroUnfilt[0]'],
+            "pitch": ['gyroADC[1]', 'gyroUnfilt[1]'],
+            "yaw": ['gyroADC[2]', 'gyroUnfilt[2]'],
+        },
+        "Gyro (Filtered)": {
+            "roll": ['gyroData[0]'],
+            "pitch": ['gyroData[1]'],
+            "yaw": ['gyroData[2]'],
+        },
+        "D-Term": {
+            "roll": ['dTerm[0]', 'axisD[0]'],
+            "pitch": ['dTerm[1]', 'axisD[1]'],
+            "yaw": ['dTerm[2]', 'axisD[2]'],
+        }
     }
-    AXES = ["Roll", "Pitch", "Yaw"]
+    AXES = ["roll", "pitch", "yaw"]
     PLOT_COLORS = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b']
-    PENS = {'Roll': 0, 'Pitch': 1, 'Yaw': 2} # Index into PLOT_COLORS
 
     def __init__(self):
         super().__init__()
@@ -35,7 +46,7 @@ class NoiseTab(QWidget):
         controls_layout.addWidget(QLabel("Axes:"))
         self.axis_checkboxes = {}
         for axis in self.AXES:
-            self.axis_checkboxes[axis] = QCheckBox(axis)
+            self.axis_checkboxes[axis] = QCheckBox(axis.capitalize())
             self.axis_checkboxes[axis].setChecked(True)
             self.axis_checkboxes[axis].stateChanged.connect(self.update_plots)
             controls_layout.addWidget(self.axis_checkboxes[axis])
@@ -77,16 +88,16 @@ class NoiseTab(QWidget):
             time_us = log_data[time_col]
             time_s = time_us / 1_000_000
 
-            for axis_idx, axis_name in enumerate(self.AXES):
+            for axis_name in self.AXES:
                 if self.axis_checkboxes[axis_name].isChecked():
-                    col_name = self._find_column(log_data, [self.DATA_SOURCES[source_key]["cols"][axis_idx]])
-                    if col_name:
-                        pen = pg.mkPen(color=color_set, style=pg.QtCore.Qt.PenStyle(axis_idx + 1))
+                    possible_names = self.DATA_SOURCES[source_key][axis_name]
+                    col_name = self._find_column(log_data, possible_names)
 
-                        # Plot trace
+                    if col_name:
+                        pen = pg.mkPen(color=color_set, style=pg.QtCore.Qt.PenStyle.SolidLine)
+
                         self.trace_plot.plot(time_s, log_data[col_name], pen=pen, name=f"{short_name} - {axis_name}")
 
-                        # Calculate and plot PSD
                         freq, psd = calculate_psd(log_data[col_name], time_us)
                         if freq is not None and len(freq) > 0 and psd is not None and len(psd) > 0:
                             psd_db = 10 * np.log10(psd)

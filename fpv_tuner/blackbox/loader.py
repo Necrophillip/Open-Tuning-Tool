@@ -46,13 +46,11 @@ def load_log(file_path):
 
 def _decode_blackbox_log(file_path):
     """
-    Decodes a binary Blackbox log file to a temporary CSV file inside a temporary directory.
+    Decodes a binary Blackbox log file. If multiple log sessions are found,
+    it intelligently selects the longest one.
 
     Returns:
-        A tuple containing:
-        - str: The path to the temporary CSV file, or None on failure.
-        - str: The path to the temporary directory for cleanup, or None.
-        - str: An error message if something went wrong, otherwise None.
+        A tuple containing: (path_to_best_csv, temp_dir_path, error_message)
     """
     temp_dir = None
     try:
@@ -73,7 +71,6 @@ def _decode_blackbox_log(file_path):
         )
         print("blackbox_decode process finished.")
 
-        # Find the created CSV file(s) in the temp directory
         csv_files = glob.glob(os.path.join(temp_dir, '*.csv'))
 
         if not csv_files:
@@ -82,10 +79,34 @@ def _decode_blackbox_log(file_path):
                          f"Stderr from blackbox_decode:\n{process.stderr}")
             return None, temp_dir, error_msg
 
-        # For multi-log BBL files, this would need to be more sophisticated.
-        # For now, we'll just work with the first log found.
-        decoded_csv_path = csv_files[0]
-        print(f"Successfully decoded log file to: {decoded_csv_path}")
+        decoded_csv_path = None
+        if len(csv_files) == 1:
+            decoded_csv_path = csv_files[0]
+        else:
+            print(f"Found {len(csv_files)} log sessions. Analyzing to find the longest one...")
+            longest_log_path = None
+            max_rows = -1
+
+            for csv_path in csv_files:
+                try:
+                    # A quick way to estimate length is by loading just one column
+                    temp_df = pd.read_csv(csv_path, header=1, usecols=[0], low_memory=False, on_bad_lines='warn')
+                    num_rows = len(temp_df)
+                    print(f" - '{os.path.basename(csv_path)}' has {num_rows} data points.")
+                    if num_rows > max_rows:
+                        max_rows = num_rows
+                        longest_log_path = csv_path
+                except Exception as e:
+                    print(f"Could not analyze {os.path.basename(csv_path)}: {e}")
+                    continue
+
+            if longest_log_path is None:
+                return None, temp_dir, "Failed to analyze multi-log sessions."
+
+            decoded_csv_path = longest_log_path
+            print(f"✅ Selected longest log session: {os.path.basename(decoded_csv_path)}")
+
+        print(f"Successfully identified log file to load: {os.path.basename(decoded_csv_path)}")
         return decoded_csv_path, temp_dir, None
 
     except FileNotFoundError:
@@ -101,19 +122,28 @@ def _decode_blackbox_log(file_path):
 
 def _load_csv_log(file_path):
     """
-    Loads a Blackbox CSV log file into a pandas DataFrame.
-    (Renamed to be a "private" function)
+    Loads a Blackbox CSV log file into a pandas DataFrame, intelligently
+    detecting if the first line is a metadata header.
     """
     try:
         if not os.path.exists(file_path) or os.path.getsize(file_path) == 0:
             print(f"Warning: CSV file is empty or does not exist: {file_path}")
             return None
 
-        df = pd.read_csv(file_path, header=0, index_col=False, low_memory=False, on_bad_lines='skip')
+        # Inspect the first line to decide which header row to use.
+        with open(file_path, 'r', encoding='utf-8') as f:
+            first_line = f.readline()
 
-        if df.columns[0].strip().upper() == 'H':
-            df = pd.read_csv(file_path, header=1, index_col=False, low_memory=False, on_bad_lines='skip')
-            df.columns = df.columns.str.strip()
+        header_row = 0
+        # Betaflight logs often start with "H " for the metadata line
+        if first_line.strip().startswith('H '):
+            print("Detected metadata header line. Using second line as header.")
+            header_row = 1
+        else:
+            print("No metadata header detected. Using first line as header.")
+
+        df = pd.read_csv(file_path, header=header_row, index_col=False, low_memory=False, on_bad_lines='warn')
+        df.columns = df.columns.str.strip()
 
         print(f"Successfully loaded {os.path.basename(file_path)}")
         return df

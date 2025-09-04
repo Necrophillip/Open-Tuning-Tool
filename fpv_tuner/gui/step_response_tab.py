@@ -7,9 +7,9 @@ from fpv_tuner.analysis.step_response import find_step_responses
 
 class StepResponseTab(QWidget):
     AXES_MAP = {
-        "Roll": {"rc": "rcCommand[0]", "setpoint": "setpoint[0]", "gyro": "gyroADC[0]", "dterm": "dTerm[0]"},
-        "Pitch": {"rc": "rcCommand[1]", "setpoint": "setpoint[1]", "gyro": "gyroADC[1]", "dterm": "dTerm[1]"},
-        "Yaw": {"rc": "rcCommand[2]", "setpoint": "setpoint[2]", "gyro": "gyroADC[2]", "dterm": "dTerm[2]"},
+        "Roll": {"rc": "rcCommand[0]", "setpoint": "setpoint[0]", "gyro": "gyroADC[0]", "dterm": ['dTerm[0]', 'axisD[0]']},
+        "Pitch": {"rc": "rcCommand[1]", "setpoint": "setpoint[1]", "gyro": "gyroADC[1]", "dterm": ['dTerm[1]', 'axisD[1]']},
+        "Yaw": {"rc": "rcCommand[2]", "setpoint": "setpoint[2]", "gyro": "gyroADC[2]", "dterm": ['dTerm[2]', 'axisD[2]']},
     }
 
     def __init__(self):
@@ -60,7 +60,6 @@ class StepResponseTab(QWidget):
         self.log_combo.addItems([os.path.basename(p) for p in self.logs.keys()])
         self.log_combo.blockSignals(False)
 
-        # Trigger analysis for the first log if available
         if self.logs:
             self.on_log_selection_change(self.log_combo.currentText())
         else:
@@ -68,7 +67,6 @@ class StepResponseTab(QWidget):
             self.analyze_axis()
 
     def on_log_selection_change(self, text):
-        # Find the full path from the basename
         for path in self.logs.keys():
             if os.path.basename(path) == text:
                 self.current_log_path = path
@@ -125,8 +123,9 @@ class StepResponseTab(QWidget):
         axis = self.axis_combo.currentText()
         cols = self.AXES_MAP[axis]
 
-        time_us = log_data[self._find_column(log_data, ['time (us)', 'time'])]
-        time_s = time_us / 1_000_000
+        time_us = self._find_column(log_data, ['time (us)', 'time'])
+        if time_us is None: return
+        time_s = log_data[time_us] / 1_000_000
 
         self.plot_widget.addItem(pg.InfiniteLine(pos=time_s.iloc[step_idx], angle=90, movable=False, pen='gray'))
 
@@ -135,7 +134,7 @@ class StepResponseTab(QWidget):
 
         setpoint_col = self._find_column(log_data, [cols["setpoint"]])
         gyro_col = self._find_column(log_data, [cols["gyro"]])
-        dterm_col = self._find_column(log_data, [cols["dterm"]])
+        dterm_col = self._find_column(log_data, cols["dterm"]) # Corrected call
 
         if setpoint_col:
             self.plot_widget.plot(time_window, data_window[setpoint_col], pen='c', name='Setpoint')
@@ -144,7 +143,7 @@ class StepResponseTab(QWidget):
         if dterm_col:
             self.plot_widget.plot(time_window, data_window[dterm_col], pen='m', name='D-Term')
 
-    def _find_column(self, df, possible_names):
+    def _find__column(self, df, possible_names):
         for name in possible_names:
             if name in df.columns:
                 return name
