@@ -2,7 +2,8 @@ import sys
 import os
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QFileDialog, QMessageBox, QTabWidget, QWidget,
-    QDockWidget, QListWidget, QVBoxLayout, QPushButton, QListWidgetItem
+    QDockWidget, QListWidget, QVBoxLayout, QPushButton, QListWidgetItem,
+    QToolBar, QStyle
 )
 from PyQt6.QtGui import QAction
 from PyQt6.QtCore import Qt, QThread
@@ -32,21 +33,35 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.noise_tab, "Noise Analysis")
         self.tabs.addTab(self.step_response_tab, "Step Response")
 
+        self._create_actions()
         self._create_menus()
+        self._create_toolbar()
         self._create_file_manager_dock()
         self.statusBar().showMessage("Ready")
+
+    def _create_actions(self):
+        # Central place for all actions
+        icon = self.style().standardIcon(QStyle.StandardPixmap.SP_DialogOpenButton)
+        self.open_action = QAction(icon, "&Open Blackbox Log(s)...", self)
+        self.open_action.setShortcut("Ctrl+O")
+        self.open_action.setStatusTip("Open one or more log files")
+        self.open_action.triggered.connect(self.open_log_files)
+
+        self.exit_action = QAction("&Exit", self)
+        self.exit_action.setStatusTip("Exit the application")
+        self.exit_action.triggered.connect(self.close)
 
     def _create_menus(self):
         menu_bar = self.menuBar()
         file_menu = menu_bar.addMenu("&File")
-        self.open_action = QAction("&Open Blackbox Log(s)...", self)
-        self.open_action.setShortcut("Ctrl+O")
-        self.open_action.triggered.connect(self.open_log_files)
         file_menu.addAction(self.open_action)
         file_menu.addSeparator()
-        exit_action = QAction("&Exit", self)
-        exit_action.triggered.connect(self.close)
-        file_menu.addAction(exit_action)
+        file_menu.addAction(self.exit_action)
+
+    def _create_toolbar(self):
+        toolbar = QToolBar("Main Toolbar")
+        self.addToolBar(toolbar)
+        toolbar.addAction(self.open_action)
 
     def _create_file_manager_dock(self):
         self.dock = QDockWidget("Loaded Logs", self)
@@ -68,7 +83,6 @@ class MainWindow(QMainWindow):
         if not file_paths:
             return
 
-        # Filter out files that are already loaded
         new_files = [fp for fp in file_paths if fp not in self.loaded_logs]
         if not new_files:
             QMessageBox.information(self, "Info", "All selected files are already loaded.")
@@ -99,16 +113,15 @@ class MainWindow(QMainWindow):
             item.setCheckState(Qt.CheckState.Checked)
             item.setData(Qt.ItemDataRole.UserRole, file_path)
             self.log_list_widget.addItem(item)
-            self.update_all_tabs()
 
-        # Check if this is the last file
-        if self.log_list_widget.count() == len(self.loaded_logs):
-             if self.thread is not None:
-                self.thread.quit()
-                self.thread.wait()
-                self.open_action.setEnabled(True)
-                self.statusBar().showMessage("Ready", 3000)
+        # This logic needs to be improved to check if all files from the worker are done
+        # For now, we update tabs after each file and re-enable at the end.
+        self.update_all_tabs()
 
+        # A simple way to check if the worker is done
+        if not self.thread.isRunning():
+             self.open_action.setEnabled(True)
+             self.statusBar().showMessage("Ready", 3000)
 
     def remove_selected_logs(self):
         for i in reversed(range(self.log_list_widget.count())):
@@ -125,7 +138,7 @@ class MainWindow(QMainWindow):
 
     def update_all_tabs(self):
         selected_logs = {}
-        for i in range(self.log_list_widget.count()):
+        for i in range(self.log_list_widget.count())):
             item = self.log_list_widget.item(i)
             if item.checkState() == Qt.CheckState.Checked:
                 file_path = item.data(Qt.ItemDataRole.UserRole)
