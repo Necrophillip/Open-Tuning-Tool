@@ -1,0 +1,99 @@
+import os
+import numpy as np
+from PyQt6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QCheckBox, QComboBox, QGridLayout, QLabel
+)
+import pyqtgraph as pg
+from fpv_tuner.analysis.noise import calculate_psd
+
+class NoiseTab(QWidget):
+    DATA_SOURCES = {
+        "Gyro (Raw)": {"cols": ['gyroADC[0]', 'gyroADC[1]', 'gyroADC[2]'], "legend": "Gyro (Raw)"},
+        "Gyro (Filtered)": {"cols": ['gyroData[0]', 'gyroData[1]', 'gyroData[2]'], "legend": "Gyro (Filtered)"},
+        "D-Term": {"cols": ['dTerm[0]', 'dTerm[1]', 'dTerm[2]'], "legend": "D-Term"}
+    }
+    AXES = ["Roll", "Pitch", "Yaw"]
+    PLOT_COLORS = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b']
+    PENS = {'Roll': 0, 'Pitch': 1, 'Yaw': 2} # Index into PLOT_COLORS
+
+    def __init__(self):
+        super().__init__()
+        self.logs = {}
+
+        main_layout = QHBoxLayout(self)
+        controls_layout = QVBoxLayout()
+        plots_layout = QVBoxLayout()
+        main_layout.addLayout(controls_layout, 1)
+        main_layout.addLayout(plots_layout, 3)
+
+        controls_layout.addWidget(QLabel("Data Source:"))
+        self.source_combo = QComboBox()
+        self.source_combo.addItems(self.DATA_SOURCES.keys())
+        self.source_combo.currentTextChanged.connect(self.update_plots)
+        controls_layout.addWidget(self.source_combo)
+
+        controls_layout.addWidget(QLabel("Axes:"))
+        self.axis_checkboxes = {}
+        for axis in self.AXES:
+            self.axis_checkboxes[axis] = QCheckBox(axis)
+            self.axis_checkboxes[axis].setChecked(True)
+            self.axis_checkboxes[axis].stateChanged.connect(self.update_plots)
+            controls_layout.addWidget(self.axis_checkboxes[axis])
+
+        controls_layout.addStretch()
+
+        self.trace_plot = pg.PlotWidget(title="Time Series Trace")
+        self.psd_plot = pg.PlotWidget(title="Power Spectral Density (PSD)")
+        self.trace_plot.addLegend()
+        self.psd_plot.addLegend()
+        self.trace_plot.setDownsampling(auto=True, mode='peak')
+        self.trace_plot.setClipToView(True)
+        self.psd_plot.setLogMode(x=True, y=True)
+        self.psd_plot.setLabel('bottom', 'Frequency (Hz)')
+        self.psd_plot.setLabel('left', 'Power/Frequency (dB/Hz)')
+        plots_layout.addWidget(self.trace_plot)
+        plots_layout.addWidget(self.psd_plot)
+
+    def set_data(self, logs):
+        self.logs = logs
+        self.update_plots()
+
+    def update_plots(self):
+        self.trace_plot.clear()
+        self.psd_plot.clear()
+        if not self.logs:
+            return
+
+        source_key = self.source_combo.currentText()
+
+        for i, (filename, log_data) in enumerate(self.logs.items()):
+            color_set = self.PLOT_COLORS[i % len(self.PLOT_COLORS)]
+            short_name = os.path.basename(filename)
+
+            time_col = self._find_column(log_data, ['time (us)', 'time'])
+            if not time_col:
+                continue
+
+            time_us = log_data[time_col]
+            time_s = time_us / 1_000_000
+
+            for axis_idx, axis_name in enumerate(self.AXES):
+                if self.axis_checkboxes[axis_name].isChecked():
+                    col_name = self._find_column(log_data, [self.DATA_SOURCES[source_key]["cols"][axis_idx]])
+                    if col_name:
+                        pen = pg.mkPen(color=color_set, style=pg.QtCore.Qt.PenStyle(axis_idx + 1))
+
+                        # Plot trace
+                        self.trace_plot.plot(time_s, log_data[col_name], pen=pen, name=f"{short_name} - {axis_name}")
+
+                        # Calculate and plot PSD
+                        freq, psd = calculate_psd(log_data[col_name], time_us)
+                        if freq is not None and len(freq) > 0 and psd is not None and len(psd) > 0:
+                            psd_db = 10 * np.log10(psd)
+                            self.psd_plot.plot(freq, psd_db, pen=pen, name=f"{short_name} - {axis_name} PSD")
+
+    def _find_column(self, df, possible_names):
+        for name in possible_names:
+            if name in df.columns:
+                return name
+        return None
