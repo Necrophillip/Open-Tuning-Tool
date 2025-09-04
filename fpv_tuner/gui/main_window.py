@@ -138,7 +138,7 @@ class MainWindow(QMainWindow):
 
     def update_all_tabs(self):
         selected_logs = {}
-        for i in range(self.log_list_widget.count())):
+        for i in range(self.log_list_widget.count()):
             item = self.log_list_widget.item(i)
             if item.checkState() == Qt.CheckState.Checked:
                 file_path = item.data(Qt.ItemDataRole.UserRole)
