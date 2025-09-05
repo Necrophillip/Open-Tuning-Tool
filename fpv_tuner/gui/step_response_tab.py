@@ -115,7 +115,7 @@ class StepResponseTab(QWidget):
 
         # --- Run Analysis ---
         results = analyze_step_response(
-            time_data, rc_data, gyro_data, dterm_data, threshold=200
+            time_data, rc_data, gyro_data, dterm_data, threshold=50, std_dev_max=500
         )
 
         # --- Display Results ---
