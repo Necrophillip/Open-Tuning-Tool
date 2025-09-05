@@ -1,6 +1,6 @@
 import os
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QComboBox, QFormLayout, QTextEdit
+    QWidget, QVBoxLayout, QHBoxLayout, QComboBox, QFormLayout, QTextEdit, QSpinBox
 )
 import pyqtgraph as pg
 import numpy as np
@@ -48,14 +48,30 @@ class StepResponseTab(QWidget):
         self.axis_combo = QComboBox()
         self.axis_combo.addItems(list(self.AXES_MAP.keys()))
 
+        self.threshold_spinbox = QSpinBox()
+        self.threshold_spinbox.setRange(1, 1000)
+        self.threshold_spinbox.setValue(30)
+        self.threshold_spinbox.setSingleStep(5)
+        self.threshold_spinbox.setSuffix(" (RC Change)")
+
+        self.std_dev_spinbox = QSpinBox()
+        self.std_dev_spinbox.setRange(1, 1000)
+        self.std_dev_spinbox.setValue(50)
+        self.std_dev_spinbox.setSingleStep(5)
+        self.std_dev_spinbox.setSuffix(" (Noise Tol.)")
+
         form_layout.addRow("Log File:", self.log_combo)
         form_layout.addRow("Axis:", self.axis_combo)
+        form_layout.addRow("Detection Threshold:", self.threshold_spinbox)
+        form_layout.addRow("Noise Tolerance:", self.std_dev_spinbox)
         controls_layout.addLayout(form_layout)
         controls_layout.addStretch()
 
         # --- Connections ---
         self.log_combo.currentTextChanged.connect(self.run_analysis)
         self.axis_combo.currentTextChanged.connect(self.run_analysis)
+        self.threshold_spinbox.valueChanged.connect(self.run_analysis)
+        self.std_dev_spinbox.valueChanged.connect(self.run_analysis)
 
     def set_data(self, logs):
         self.logs = logs
@@ -114,8 +130,10 @@ class StepResponseTab(QWidget):
         dterm_data = log_data[dterm_col].to_numpy() if dterm_col else None
 
         # --- Run Analysis ---
+        threshold = self.threshold_spinbox.value()
+        std_dev_max = self.std_dev_spinbox.value()
         results = analyze_step_response(
-            time_data, rc_data, gyro_data, dterm_data, threshold=50, std_dev_max=500
+            time_data, rc_data, gyro_data, dterm_data, threshold=threshold, std_dev_max=std_dev_max
         )
 
         # --- Display Results ---
