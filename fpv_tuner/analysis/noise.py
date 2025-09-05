@@ -1,6 +1,6 @@
 import numpy as np
 import pandas as pd
-from scipy.signal import welch
+from scipy.signal import welch, spectrogram
 
 def get_sampling_frequency(time_series_us):
     """
@@ -85,3 +85,25 @@ def calculate_signal_stats(data_series, frequencies, psd):
         stats["Max Noise Peak"] = f"{max_noise_freq:.1f} Hz"
 
     return stats
+
+def calculate_spectrogram(data_series, time_series_us, nperseg=256):
+    """
+    Calculates the Spectrogram of a signal.
+    """
+    if data_series is None or data_series.empty:
+        return None, None, None
+
+    # Remove any NaN values that would crash the calculation
+    data = data_series.dropna()
+    if data.empty:
+        return None, None, None
+
+    fs = get_sampling_frequency(time_series_us)
+
+    try:
+        # Using .values to ensure it's a NumPy array
+        frequencies, times, Sxx = spectrogram(data.values, fs, nperseg=nperseg)
+        return frequencies, times, Sxx
+    except Exception as e:
+        print(f"Error calculating spectrogram: {e}")
+        return None, None, None
