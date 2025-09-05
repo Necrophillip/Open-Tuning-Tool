@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt
 import pyqtgraph as pg
 
-from fpv_tuner.analysis.tuning import DRONE_PROFILES, parse_dump, find_optimal_tune, generate_cli, simulate_step_response, validate_settings, calculate_response_metrics
+from fpv_tuner.analysis.tuning import DRONE_PROFILES, parse_dump, tune_with_sliders, generate_cli, simulate_step_response, validate_settings, calculate_response_metrics
 
 class TuningTab(QWidget):
     dump_filepath = None
@@ -224,14 +224,12 @@ class TuningTab(QWidget):
         drone_profile = DRONE_PROFILES.get(profile_name, DRONE_PROFILES["Default"])
         axis_to_tune = self.axis_combo.currentText().lower()
 
-        # Call the new slider-based tuner
         self.proposed_pids, sliders = tune_with_sliders(
             self.current_pids, drone_profile, axis_to_tune
         )
 
         self.setCursor(Qt.CursorShape.ArrowCursor)
 
-        # Update the UI with the results
         self.update_ui_with_pids(self.proposed_pids, target='proposed')
         self.update_slider_display(sliders)
 
@@ -239,7 +237,6 @@ class TuningTab(QWidget):
         self.update_simulation_button.setEnabled(True)
 
     def update_slider_display(self, sliders):
-        """Updates the slider display labels."""
         self.slider_master.setText(f"{sliders.get('master', 1.0):.2f}")
         self.slider_tracking.setText(f"{sliders.get('tracking', 1.0):.2f}")
         self.slider_drift.setText(f"{sliders.get('drift', 1.0):.2f}")
