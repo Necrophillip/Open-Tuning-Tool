@@ -107,7 +107,7 @@ class StepResponseTab(QWidget):
             rc_data = log_data[rc_col].to_numpy()
             gyro_data = log_data[gyro_col].to_numpy()
 
-            results = analyze_axis_response(time_data, rc_data, gyro_data, threshold_ratio)
+            results = analyze_axis_response(axis_name, time_data, rc_data, gyro_data, threshold_ratio)
 
             full_metrics_text += f"--- {axis_name} ---\n"
             if "error" in results:
