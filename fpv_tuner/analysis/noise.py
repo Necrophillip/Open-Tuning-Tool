@@ -52,7 +52,8 @@ def calculate_psd(data_series, time_series_us, nperseg=256):
 
     # Welch's method for a cleaner spectrum
     try:
-        frequencies, psd = welch(data, fs, nperseg=nperseg)
+        # Convert pandas Series to NumPy array for max compatibility with scipy
+        frequencies, psd = welch(data.values, fs, nperseg=nperseg)
         return frequencies, psd
     except Exception as e:
         print(f"Error calculating PSD: {e}")
