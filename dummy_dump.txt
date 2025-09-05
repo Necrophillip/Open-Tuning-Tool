@@ -1,0 +1,15 @@
+# Betaflight / STM32F405 (S405) 4.5.2 May 11 2025 / 01:19:18 (024f8e13d) MSP API: 1.46
+profile 0
+set p_roll = 45
+set i_roll = 80
+set d_roll = 40
+set f_roll = 120
+set p_pitch = 47
+set i_pitch = 84
+set d_pitch = 46
+set f_pitch = 125
+set p_yaw = 45
+set i_yaw = 80
+set d_yaw = 0
+set f_yaw = 120
+set dterm_lpf1_static_hz = 75
