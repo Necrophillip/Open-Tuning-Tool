@@ -1,89 +1,134 @@
 import numpy as np
-from scipy.optimize import curve_fit
 
-# ------------------------------
-# System Response Models
-# ------------------------------
-def first_order_step_model(t, K, tau):
-    """ First-order system step response model. """
-    if tau == 0:
-        return K * np.ones_like(t)
-    return K * (1 - np.exp(-t / tau))
+def find_step_responses(rc_command, time_us, threshold=300, min_step_duration_ms=40, pre_step_flat_ms=10, post_step_flat_ms=100):
+    """
+    Finds step-like movements in an RC command trace using NumPy.
+    """
+    if rc_command is None or time_us is None or len(rc_command) == 0:
+        return []
 
-def second_order_step_model(t, K, wn, zeta):
-    """ Second-order system step response model. """
-    if wn <= 0 or zeta <= 0:
-        return np.zeros_like(t)
-    if np.isclose(zeta, 1):
-        return K * (1 - (1 + wn * t) * np.exp(-wn * t))
-    elif zeta > 1:
-        p1 = wn * (zeta - np.sqrt(zeta**2 - 1))
-        p2 = wn * (zeta + np.sqrt(zeta**2 - 1))
-        return K * (1 + (p1 * np.exp(-p2 * t) - p2 * np.exp(-p1 * t)) / (p2 - p1))
+    time_s = time_us / 1_000_000
+    # Handle case where time_s might be empty or have a single point
+    if (time_s[-1] - time_s[0]) > 0 and len(time_us) > 1:
+        fs = len(time_us) / (time_s[-1] - time_s[0])
     else:
-        wd = wn * np.sqrt(1 - zeta**2)
-        phi = np.arccos(zeta)
-        return K * (1 - (1 / np.sqrt(1 - zeta**2)) * np.exp(-zeta * wn * t) * np.sin(wd * t + phi))
+        fs = 2000 # Default fallback sampling frequency
 
-# ------------------------------
-# Main Analysis Function
-# ------------------------------
-def analyze_axis_response(axis_name, time, rc_command, gyro_response, threshold_ratio=0.7):
+    ms_to_indices = lambda ms: int((ms / 1000.0) * fs)
+
+    pre_indices = ms_to_indices(pre_step_flat_ms)
+    post_indices = ms_to_indices(post_step_flat_ms)
+    min_duration_indices = ms_to_indices(min_step_duration_ms)
+
+    # np.diff is equivalent to pandas .diff()
+    diffs = np.abs(np.diff(rc_command, prepend=rc_command[0]))
+    potential_steps = np.where(diffs > threshold)[0]
+
+    found_steps = []
+    last_step_end = -1
+
+    for i in potential_steps:
+        if i <= last_step_end or i < pre_indices or i + post_indices >= len(rc_command):
+            continue
+
+        start_idx = i - pre_indices
+        end_idx = i + post_indices
+
+        pre_step_segment = rc_command[start_idx:i]
+        post_step_segment = rc_command[i:end_idx]
+
+        # np.std is equivalent to pandas .std()
+        if np.std(pre_step_segment) < 50 and np.std(post_step_segment) < 50:
+            if end_idx - i > min_duration_indices:
+                found_steps.append((start_idx, i, end_idx))
+                last_step_end = end_idx
+
+    return found_steps
+
+def step_response_metrics(time, input_signal, output_signal):
     """
-    Analyzes a single axis to find the average, normalized step response and fit system models.
+    Calculates key metrics for a step response using NumPy.
     """
-    dt = np.mean(np.diff(time))
-    if np.isnan(dt) or dt == 0:
-        return {"error": "Invalid time data"}
+    # Initial and final values of the input
+    val_i_in = input_signal[0]
+    val_f_in = input_signal[-1]
+    step_amplitude = abs(val_f_in - val_i_in)
 
-    # --- Step 1: Detect large deflections ---
-    max_rc = np.max(np.abs(rc_command))
-    if max_rc == 0:
-        return {"error": "No RC command input"}
+    # Initial and final values of the output
+    val_i_out = np.mean(output_signal[:10])
+    val_f_out = np.mean(output_signal[-10:])
 
-    thresh = threshold_ratio * max_rc
-    deflex_mask = np.abs(rc_command) > thresh
-    starts = np.where(np.diff(deflex_mask.astype(int)) == 1)[0]
-
-    if len(starts) == 0:
-        return {"error": f"No deflections found with current sensitivity."}
-
-    # --- Step 2: Extract, normalize, and average responses ---
-    initial_window = int(0.2 / dt) # 200ms window
-    responses = []
-    for idx in starts:
-        if idx + initial_window > len(time) or idx < 5: continue
-
-        # Use a more robust delta and prevent division by zero
-        delta_u = rc_command[idx + 5] - rc_command[idx - 5]
-        if delta_u == 0: continue
-
-        t_win = time[idx:idx + initial_window] - time[idx]
-        y_win = gyro_response[idx:idx + initial_window]
-        y_norm = (y_win - y_win[0]) / delta_u
-        responses.append(y_norm)
-
-    if not responses:
-        return {"error": "Could not extract any valid response windows."}
-
-    min_len = min(len(r) for r in responses)
-    t_avg = time[:min_len] - time[0]
-    y_avg = np.mean([r[:min_len] for r in responses], axis=0)
-
-    # --- Step 3: Fit models ---
-    results = {"t_avg": t_avg, "y_avg": y_avg, "popt1": None, "popt2": None, "num_responses": len(responses)}
+    # Rise Time (10% to 90%)
     try:
-        popt1, _ = curve_fit(first_order_step_model, t_avg, y_avg, p0=[np.median(y_avg), 0.05], bounds=([0, 0], [2, 1]))
-        results["popt1"] = popt1
-    except Exception as e:
-        print(f"1st order fit failed for {axis_name}: {e}")
+        ten_percent_val = val_i_out + 0.1 * (val_f_out - val_i_out)
+        ninety_percent_val = val_i_out + 0.9 * (val_f_out - val_i_out)
 
+        # np.where returns a tuple of arrays, we need the first element
+        time_at_10_indices = np.where(output_signal >= ten_percent_val)[0]
+        time_at_90_indices = np.where(output_signal >= ninety_percent_val)[0]
+
+        if len(time_at_10_indices) == 0 or len(time_at_90_indices) == 0:
+             raise IndexError("Could not find 10% or 90% point.")
+
+        time_at_10 = time[time_at_10_indices[0]]
+        time_at_90 = time[time_at_90_indices[0]]
+        rise_time = time_at_90 - time_at_10
+    except IndexError:
+        rise_time = np.nan
+
+    # Overshoot
+    peak_val = np.max(output_signal)
+    overshoot = ((peak_val - val_f_out) / (val_f_out - val_i_out)) * 100 if (val_f_out - val_i_out) != 0 else 0
+
+    # Settling Time (within 2% of final value)
     try:
-        p0 = [np.median(y_avg), 100, 0.7]
-        bounds = ([0, 1, 0.1], [2, 1000, 1.5])
-        popt2, _ = curve_fit(second_order_step_model, t_avg, y_avg, p0=p0, bounds=bounds, maxfev=5000)
-        results["popt2"] = popt2
-    except Exception as e:
-        print(f"2nd order fit failed for {axis_name}: {e}")
+        settling_threshold = 0.02 * abs(val_f_out - val_i_out)
+        outside_bounds = np.where(np.abs(output_signal - val_f_out) > settling_threshold)[0]
+        last_outside_index = outside_bounds[-1] if len(outside_bounds) > 0 else 0
+        settling_time = time[last_outside_index] - time[0]
+    except IndexError:
+        settling_time = np.nan
 
-    return results
+    return {
+        "Step Amplitude": step_amplitude,
+        "Rise Time (s)": rise_time,
+        "Overshoot (%)": overshoot,
+        "Settling Time (s)": settling_time
+    }
+
+def analyze_step_response(time_data, rc_data, gyro_data, dterm_data=None, threshold=200):
+    """
+    Main analysis function to be called from the GUI.
+    Finds the most significant step and returns its data and metrics.
+    """
+    # find_step_responses expects time in us
+    steps = find_step_responses(rc_data, time_data, threshold=threshold)
+
+    if not steps:
+        return {"error": "No significant steps found."}
+
+    # For now, analyze the first step found
+    start, step_idx, end = steps[0]
+
+    # Slice the data for the found step
+    time_slice = time_data[start:end].copy() / 1_000_000 # Convert to seconds
+    time_slice -= time_slice[0] # Start time from 0 for the plot
+
+    rc_slice = rc_data[start:end].copy()
+    gyro_slice = gyro_data[start:end].copy()
+
+    dterm_slice = None
+    if dterm_data is not None:
+        dterm_slice = dterm_data[start:end].copy()
+
+    # Calculate metrics on the sliced data
+    metrics = step_response_metrics(time_slice, rc_slice, gyro_slice)
+
+    return {
+        "metrics": metrics,
+        "time_slice": time_slice,
+        "rc_slice": rc_slice,
+        "gyro_slice": gyro_slice,
+        "dterm_slice": dterm_slice,
+        "error": None
+    }
