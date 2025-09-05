@@ -26,6 +26,7 @@ class TuningTab(QWidget):
         self._create_load_controls(left_panel_layout)
         self._create_scope_controls(left_panel_layout)
         self._create_pid_controls(left_panel_layout)
+        self._create_slider_display(left_panel_layout)
         self._create_simulation_controls(left_panel_layout)
         left_panel_layout.addStretch()
 
@@ -87,8 +88,23 @@ class TuningTab(QWidget):
         layout.addWidget(self.update_simulation_button, 5, 4, 1, 3)
         parent_layout.addWidget(group)
 
+    def _create_slider_display(self, parent_layout):
+        group = QGroupBox("5. Proposed Sliders")
+        layout = QFormLayout(group)
+        self.slider_master = QLabel("1.0")
+        self.slider_tracking = QLabel("1.0")
+        self.slider_drift = QLabel("1.0")
+        self.slider_damp = QLabel("1.0")
+        self.slider_ff = QLabel("1.0")
+        layout.addRow("Master:", self.slider_master)
+        layout.addRow("Tracking:", self.slider_tracking)
+        layout.addRow("Drift:", self.slider_drift)
+        layout.addRow("Damping:", self.slider_damp)
+        layout.addRow("FeedForward:", self.slider_ff)
+        parent_layout.addWidget(group)
+
     def _create_simulation_controls(self, parent_layout):
-        group = QGroupBox("4. Simulation Settings")
+        group = QGroupBox("6. Simulation Settings")
         layout = QFormLayout(group)
         self.noise_checkbox = QCheckBox("Enable Gyro Noise")
         self.noise_level_spinbox = QDoubleSpinBox()
@@ -207,14 +223,28 @@ class TuningTab(QWidget):
         profile_name = self.profile_combo.currentText()
         drone_profile = DRONE_PROFILES.get(profile_name, DRONE_PROFILES["Default"])
         axis_to_tune = self.axis_combo.currentText().lower()
-        tuning_mode = self.mode_combo.currentText()
 
-        self.proposed_pids = find_optimal_tune(self.current_pids, drone_profile, axis_to_tune, tuning_mode)
+        # Call the new slider-based tuner
+        self.proposed_pids, sliders = tune_with_sliders(
+            self.current_pids, drone_profile, axis_to_tune
+        )
 
         self.setCursor(Qt.CursorShape.ArrowCursor)
+
+        # Update the UI with the results
         self.update_ui_with_pids(self.proposed_pids, target='proposed')
+        self.update_slider_display(sliders)
+
         self.run_simulations_and_update_cli()
         self.update_simulation_button.setEnabled(True)
+
+    def update_slider_display(self, sliders):
+        """Updates the slider display labels."""
+        self.slider_master.setText(f"{sliders.get('master', 1.0):.2f}")
+        self.slider_tracking.setText(f"{sliders.get('tracking', 1.0):.2f}")
+        self.slider_drift.setText(f"{sliders.get('drift', 1.0):.2f}")
+        self.slider_damp.setText(f"{sliders.get('damp', 1.0):.2f}")
+        self.slider_ff.setText(f"{sliders.get('ff', 1.0):.2f}")
 
     def on_simulate_wind_gust(self):
         self.run_simulations_and_update_cli(disturbance_magnitude=20.0, disturbance_time=0.1)

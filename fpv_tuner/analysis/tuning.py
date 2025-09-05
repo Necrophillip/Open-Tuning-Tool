@@ -196,8 +196,82 @@ def _calculate_fitness(metrics, weights):
     return score
 
 
+def _compute_pids_from_sliders(base_pids, sliders):
+    """Applies slider multipliers to a set of base PID values."""
+    pids = base_pids.copy()
+    m = sliders.get("master", 1.0)
+    t = sliders.get("tracking", 1.0)
+    drift = sliders.get("drift", 1.0)
+    damp = sliders.get("damp", 1.0)
+    ff = sliders.get("ff", 1.0)
+
+    for axis in ["roll", "pitch", "yaw"]:
+        pids[f'p_{axis}'] = int(m * t * base_pids.get(f'p_{axis}', 0))
+        pids[f'i_{axis}'] = int(m * t * drift * base_pids.get(f'i_{axis}', 0))
+        pids[f'd_{axis}'] = int(m * damp * base_pids.get(f'd_{axis}', 0))
+        pids[f'f_{axis}'] = int(m * ff * base_pids.get(f'f_{axis}', 0))
+
+    return pids
+
+def tune_with_sliders(base_pids, drone_profile, axis_to_tune, iterations=50):
+    """
+    Uses a heuristic-based iterative approach to find a good set of sliders.
+    """
+    sliders = {"master": 1.0, "tracking": 1.0, "drift": 1.0, "damp": 1.0, "ff": 1.0}
+
+    # Get parameters from the selected drone profile
+    inertia = drone_profile.get("inertia", 0.005)
+
+    # Define target metrics (can be moved to profile later)
+    target_metrics = {"Overshoot (%)": 5, "Rise Time (s)": 0.05}
+
+    # Small increments for slider adjustments
+    STEP = 0.02
+
+    for i in range(iterations):
+        current_pids = _compute_pids_from_sliders(base_pids, sliders)
+
+        # Validate the new PIDs
+        warnings = validate_settings(current_pids, drone_profile)
+        if warnings:
+            print(f"Iteration {i}: Unsafe PIDs generated, stopping.")
+            break # Stop if we've gone into an unsafe region
+
+        sim_results = simulate_step_response(current_pids, axis=axis_to_tune, inertia=inertia, noise_level=0.05)
+        if not sim_results:
+            continue
+
+        metrics = calculate_response_metrics(sim_results["time"], sim_results["response"])
+        if not metrics or np.isnan(metrics.get("Overshoot (%)", 0)):
+            continue
+
+        # Heuristic adjustment logic based on user's pseudocode
+        overshoot = metrics.get("Overshoot (%)", 0)
+        rise_time = metrics.get("Rise Time (s)", 1.0)
+
+        # This is a simplified heuristic model. A real implementation would be more complex.
+        if overshoot > target_metrics["Overshoot (%)"] * 1.2: # more than 20% over target
+            sliders["damp"] += STEP
+            sliders["tracking"] -= STEP * 0.5 # Reduce P/I slightly to help with overshoot
+        elif overshoot < target_metrics["Overshoot (%)"] * 0.8: # too sluggish
+             sliders["damp"] -= STEP
+
+        if rise_time > target_metrics["Rise Time (s)"] * 1.2:
+            sliders["master"] += STEP
+        elif rise_time < target_metrics["Rise Time (s)"] * 0.8:
+            sliders["master"] -= STEP * 0.5
+
+        # Clamp sliders to a reasonable range to prevent runaway
+        for key in sliders:
+            sliders[key] = np.clip(sliders[key], 0.5, 2.0)
+
+    final_pids = _compute_pids_from_sliders(base_pids, sliders)
+    return final_pids, sliders
+
+
 def find_optimal_tune(initial_pids, drone_profile, axis_to_tune, mode='RP', iterations=50):
     """
+    DEPRECATED: This function directly modifies PID values. The new approach is tune_with_sliders.
     Uses a simple hill-climbing algorithm to find a better PID tune.
     """
     best_pids = initial_pids.copy()
