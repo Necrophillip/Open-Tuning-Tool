@@ -56,6 +56,15 @@ class NoiseTab(QWidget):
             self.signal_list.addItem(item)
 
         controls_layout.addWidget(self.signal_list)
+
+        # Stats Display
+        controls_layout.addWidget(QLabel("Signal Statistics:"))
+        self.stats_text = QTextEdit()
+        self.stats_text.setReadOnly(True)
+        self.stats_text.setFontFamily("monospace")
+        self.stats_text.setFixedHeight(100) # Give it a fixed height
+        controls_layout.addWidget(self.stats_text)
+
         controls_layout.addStretch()
 
         # --- Connections ---
@@ -82,6 +91,7 @@ class NoiseTab(QWidget):
     def update_plots(self):
         self.trace_plot.clear()
         self.psd_plot.clear()
+        self.stats_text.clear()
 
         if not self.logs:
             return
@@ -92,12 +102,14 @@ class NoiseTab(QWidget):
             if item.checkState() == Qt.CheckState.Checked:
                 checked_signals.append(item.text())
 
+        if not checked_signals:
+            return
+
         nperseg = int(self.nperseg_combo.currentText())
 
         color_index = 0
+        full_stats_text = ""
 
-        # Operate on the first loaded log.
-        # TODO: Add a log file selector if multiple logs are loaded.
         filename, log_data = next(iter(self.logs.items()))
 
         time_col = self._find_column(log_data, ['time (us)', 'time'])
@@ -118,15 +130,28 @@ class NoiseTab(QWidget):
                 color = self.PLOT_COLORS[color_index % len(self.PLOT_COLORS)]
                 pen = pg.mkPen(color=color, style=Qt.PenStyle.SolidLine)
 
-                self.trace_plot.plot(time_s, log_data[col_name], pen=pen, name=signal_name)
+                signal_data = log_data[col_name]
+                self.trace_plot.plot(time_s, signal_data, pen=pen, name=signal_name)
 
-                # Use the pandas series for PSD calculation as the backend expects it
-                freq, psd = calculate_psd(log_data[col_name], time_us, nperseg=nperseg)
+                freq, psd = calculate_psd(signal_data, time_us, nperseg=nperseg)
+
+                stats = {}
                 if freq is not None and len(freq) > 0 and psd is not None and len(psd) > 0:
                     psd_db = 10 * np.log10(psd)
                     self.psd_plot.plot(freq, psd_db, pen=pen, name=f"{signal_name} PSD")
+                    stats = calculate_signal_stats(signal_data, freq, psd)
+                else: # Still calculate time-domain stats even if PSD fails
+                    stats = calculate_signal_stats(signal_data, None, None)
+
+                # Format stats for this signal
+                full_stats_text += f"--- {signal_name} ---\n"
+                for key, value in stats.items():
+                    full_stats_text += f"  {key}: {value}\n"
+                full_stats_text += "\n"
 
                 color_index += 1
+
+        self.stats_text.setText(full_stats_text)
 
     def _find_column(self, df, possible_names):
         for name in possible_names:

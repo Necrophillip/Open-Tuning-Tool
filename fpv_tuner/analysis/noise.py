@@ -58,3 +58,30 @@ def calculate_psd(data_series, time_series_us, nperseg=256):
     except Exception as e:
         print(f"Error calculating PSD: {e}")
         return None, None
+
+def calculate_signal_stats(data_series, frequencies, psd):
+    """
+    Calculates a set of statistics for a given signal and its PSD.
+    """
+    if data_series is None or data_series.empty:
+        return {}
+
+    # Time-domain stats
+    peak = data_series.max()
+    rms = np.sqrt(np.mean(data_series**2))
+    std_dev = data_series.std()
+
+    stats = {
+        "Peak": f"{peak:.2f}",
+        "RMS": f"{rms:.2f}",
+        "Std. Dev.": f"{std_dev:.2f}",
+    }
+
+    # Frequency-domain stats
+    if frequencies is not None and psd is not None and len(frequencies) > 0 and len(psd) > 0:
+        max_noise_idx = np.argmax(psd)
+        max_noise_freq = frequencies[max_noise_idx]
+        # The PSD value is already power, not dB yet.
+        stats["Max Noise Peak"] = f"{max_noise_freq:.1f} Hz"
+
+    return stats
