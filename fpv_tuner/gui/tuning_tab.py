@@ -1,13 +1,14 @@
 import os
+import shutil
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QTextEdit, QSpinBox, QPushButton,
-    QFileDialog, QGroupBox, QLabel, QMessageBox
+    QFileDialog, QGroupBox, QLabel, QMessageBox, QCheckBox, QDoubleSpinBox
 )
 from PyQt6.QtCore import pyqtSignal
 import pyqtgraph as pg
 
 # Import backend logic
-from fpv_tuner.analysis.tuning import parse_dump, propose_tune, generate_cli, simulate_step_response
+from fpv_tuner.analysis.tuning import parse_dump, find_optimal_tune, generate_cli, simulate_step_response, validate_settings, calculate_response_metrics
 
 class TuningTab(QWidget):
     # Store data
@@ -72,6 +73,22 @@ class TuningTab(QWidget):
         proposed_pids_layout.addWidget(self.update_simulation_button)
         left_panel_layout.addWidget(proposed_pids_group)
 
+        # Simulation Settings Box
+        sim_settings_group = QGroupBox("Simulation Settings")
+        sim_settings_layout = QFormLayout(sim_settings_group)
+        self.noise_checkbox = QCheckBox("Enable Gyro Noise")
+        self.noise_level_spinbox = QDoubleSpinBox()
+        self.noise_level_spinbox.setRange(0.0, 1.0)
+        self.noise_level_spinbox.setSingleStep(0.01)
+        self.noise_level_spinbox.setValue(0.05)
+        self.noise_level_spinbox.setEnabled(False) # Disabled by default
+
+        sim_settings_layout.addRow(self.noise_checkbox)
+        sim_settings_layout.addRow("Noise Level:", self.noise_level_spinbox)
+        self.wind_gust_button = QPushButton("Simulate Wind Gust")
+        sim_settings_layout.addWidget(self.wind_gust_button)
+        left_panel_layout.addWidget(sim_settings_group)
+
         left_panel_layout.addStretch()
 
         # --- Right Panel Widgets ---
@@ -82,24 +99,73 @@ class TuningTab(QWidget):
         self.plot_widget.showGrid(x=True, y=True)
         right_panel_layout.addWidget(self.plot_widget, 2)
 
-        cli_group = QGroupBox("4. Betaflight CLI Commands")
+        # Metrics and CLI section
+        bottom_right_layout = QHBoxLayout()
+        right_panel_layout.addLayout(bottom_right_layout, 1)
+
+        metrics_group = QGroupBox("4. Performance Metrics")
+        metrics_layout = QFormLayout(metrics_group)
+
+        self.metrics_overshoot_current = QLabel("N/A")
+        self.metrics_overshoot_proposed = QLabel("N/A")
+        self.metrics_rise_time_current = QLabel("N/A")
+        self.metrics_rise_time_proposed = QLabel("N/A")
+        self.metrics_settling_time_current = QLabel("N/A")
+        self.metrics_settling_time_proposed = QLabel("N/A")
+        self.metrics_oscillation_current = QLabel("N/A")
+        self.metrics_oscillation_proposed = QLabel("N/A")
+
+        metrics_layout.addRow(QLabel("<b>Metric</b>"), QHBoxLayout()) # Title row hack
+        metrics_layout.itemAt(0, QFormLayout.ItemRole.LabelRole).widget().setStyleSheet("font-weight: bold;")
+
+        # A bit of a layout trick to make two columns
+        current_label = QLabel("<b>Current</b>")
+        proposed_label = QLabel("<b>Proposed</b>")
+        metrics_title_layout = QHBoxLayout()
+        metrics_title_layout.addWidget(current_label)
+        metrics_title_layout.addWidget(proposed_label)
+        metrics_layout.addRow("", metrics_title_layout)
+
+        metrics_layout.addRow("Overshoot (%):", self._create_metric_row(self.metrics_overshoot_current, self.metrics_overshoot_proposed))
+        metrics_layout.addRow("Rise Time (s):", self._create_metric_row(self.metrics_rise_time_current, self.metrics_rise_time_proposed))
+        metrics_layout.addRow("Settling Time (s):", self._create_metric_row(self.metrics_settling_time_current, self.metrics_settling_time_proposed))
+        metrics_layout.addRow("Oscillation:", self._create_metric_row(self.metrics_oscillation_current, self.metrics_oscillation_proposed))
+
+        bottom_right_layout.addWidget(metrics_group)
+
+        cli_group = QGroupBox("5. Betaflight CLI Commands")
         cli_layout = QVBoxLayout(cli_group)
         self.cli_output_text = QTextEdit()
         self.cli_output_text.setReadOnly(True)
         self.cli_output_text.setFontFamily("monospace")
         self.cli_output_text.setPlaceholderText("CLI commands will be generated here...")
         cli_layout.addWidget(self.cli_output_text)
-        right_panel_layout.addWidget(cli_group, 1)
+        bottom_right_layout.addWidget(cli_group)
 
         # --- Connections ---
         self.load_dump_button.clicked.connect(self.on_load_dump)
         self.propose_button.clicked.connect(self.on_generate_proposal)
         self.update_simulation_button.clicked.connect(self.run_simulations_and_update_cli)
 
+        # Simulation settings connections
+        self.noise_checkbox.toggled.connect(self.noise_level_spinbox.setEnabled)
+        self.noise_checkbox.toggled.connect(lambda: self.run_simulations_and_update_cli())
+        self.noise_level_spinbox.valueChanged.connect(lambda: self.run_simulations_and_update_cli())
+        self.wind_gust_button.clicked.connect(self.on_simulate_wind_gust)
+
     def on_load_dump(self):
         filepath, _ = QFileDialog.getOpenFileName(self, "Open Betaflight Dump", "", "Text Files (*.txt);;All Files (*)")
         if not filepath:
             return
+
+        # --- Backup Logic ---
+        backup_path = filepath + ".bak"
+        if not os.path.exists(backup_path):
+            try:
+                shutil.copy2(filepath, backup_path)
+                print(f"Created backup at: {backup_path}")
+            except Exception as e:
+                QMessageBox.warning(self, "Backup Failed", f"Could not create a backup of the dump file.\n\n{e}")
 
         pids, error = parse_dump(filepath)
         if error:
@@ -121,7 +187,6 @@ class TuningTab(QWidget):
         self.current_i_pitch.setText(str(pids.get('i_pitch', 'N/A')))
         self.current_d_pitch.setText(str(pids.get('d_pitch', 'N/A')))
 
-        # Set proposed values in spinboxes
         self.proposed_d_roll.setValue(pids.get('d_roll', 0))
         self.proposed_d_pitch.setValue(pids.get('d_pitch', 0))
 
@@ -129,26 +194,50 @@ class TuningTab(QWidget):
         if not self.current_pids:
             return
 
-        self.proposed_pids = propose_tune(self.current_pids)
+        # Show a busy cursor while the optimization is running
+        self.setCursor(pg.QtCore.Qt.CursorShape.WaitCursor)
+
+        # Run the optimization algorithm
+        self.proposed_pids = find_optimal_tune(self.current_pids)
+
+        # Restore the cursor
+        self.setCursor(pg.QtCore.Qt.CursorShape.ArrowCursor)
+
+        # Update the UI with the newly found values
+        # Note: The optimizer might have changed P-gains as well, so we update everything
         self.proposed_d_roll.setValue(self.proposed_pids.get('d_roll', 0))
         self.proposed_d_pitch.setValue(self.proposed_pids.get('d_pitch', 0))
+
+        # We also need labels for proposed P-gains, but for now this is sufficient
+        # to prove the concept. The UI can be expanded later.
 
         self.run_simulations_and_update_cli()
         self.update_simulation_button.setEnabled(True)
 
-    def run_simulations_and_update_cli(self, is_initial_run=False):
+    def on_simulate_wind_gust(self):
+        # We will apply a disturbance at t=0.1s with a magnitude of 20
+        self.run_simulations_and_update_cli(disturbance_magnitude=20.0, disturbance_time=0.1)
+
+    def run_simulations_and_update_cli(self, is_initial_run=False, disturbance_magnitude=0.0, disturbance_time=0.0):
         if not self.current_pids:
             return
 
         self.plot_widget.clear()
 
+        noise_level = self.noise_level_spinbox.value() if self.noise_checkbox.isChecked() else 0.0
+
         # Simulate "before"
-        time, response_before = simulate_step_response(self.current_pids)
+        time, response_before, d_trace_before = simulate_step_response(
+            self.current_pids, noise_level=noise_level,
+            disturbance_magnitude=disturbance_magnitude, disturbance_time=disturbance_time
+        )
         if time is not None:
             self.plot_widget.plot(time, response_before, pen='r', name='Current Tune')
+            metrics_before = calculate_response_metrics(time, response_before)
+            self._update_metrics_display(metrics_before, is_current=True)
 
         if is_initial_run:
-            return # Don't plot proposed if we just loaded
+            return
 
         # Get proposed values from UI
         self.proposed_pids = self.current_pids.copy()
@@ -156,12 +245,40 @@ class TuningTab(QWidget):
         self.proposed_pids['d_pitch'] = self.proposed_d_pitch.value()
 
         # Simulate "after"
-        time, response_after = simulate_step_response(self.proposed_pids)
+        time, response_after, d_trace_after = simulate_step_response(
+            self.proposed_pids, noise_level=noise_level,
+            disturbance_magnitude=disturbance_magnitude, disturbance_time=disturbance_time
+        )
         if time is not None:
             self.plot_widget.plot(time, response_after, pen='g', name='Proposed Tune')
+            metrics_after = calculate_response_metrics(time, response_after)
+            self._update_metrics_display(metrics_after, is_current=False)
 
         # Update CLI
         self.cli_output_text.setText(generate_cli(self.proposed_pids))
+
+        warnings = validate_settings(self.proposed_pids)
+        if warnings:
+            warning_text = "The following proposed values are outside of the recommended safe ranges:\n\n" + "\n".join(warnings)
+            QMessageBox.warning(self, "Safety Warning", warning_text)
+
+    def _create_metric_row(self, label1, label2):
+        layout = QHBoxLayout()
+        layout.addWidget(label1)
+        layout.addWidget(label2)
+        return layout
+
+    def _update_metrics_display(self, metrics, is_current=True):
+        if is_current:
+            self.metrics_overshoot_current.setText(f"{metrics.get('Overshoot (%)', 0):.2f}")
+            self.metrics_rise_time_current.setText(f"{metrics.get('Rise Time (s)', 0):.4f}")
+            self.metrics_settling_time_current.setText(f"{metrics.get('Settling Time (s)', 0):.4f}")
+            self.metrics_oscillation_current.setText(f"{metrics.get('Oscillation', 0):.2f}")
+        else:
+            self.metrics_overshoot_proposed.setText(f"{metrics.get('Overshoot (%)', 0):.2f}")
+            self.metrics_rise_time_proposed.setText(f"{metrics.get('Rise Time (s)', 0):.4f}")
+            self.metrics_settling_time_proposed.setText(f"{metrics.get('Settling Time (s)', 0):.4f}")
+            self.metrics_oscillation_proposed.setText(f"{metrics.get('Oscillation', 0):.2f}")
 
     def set_data(self, logs):
         # This tab is self-contained and does not depend on blackbox logs
