@@ -1,8 +1,10 @@
 import os
 import numpy as np
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QCheckBox, QComboBox, QGridLayout, QLabel
+    QWidget, QVBoxLayout, QHBoxLayout, QCheckBox, QGridLayout, QLabel,
+    QListWidget, QListWidgetItem
 )
+from PyQt6.QtCore import Qt
 import pyqtgraph as pg
 from fpv_tuner.analysis.noise import calculate_psd
 
@@ -37,11 +39,16 @@ class NoiseTab(QWidget):
         main_layout.addLayout(controls_layout, 1)
         main_layout.addLayout(plots_layout, 3)
 
-        controls_layout.addWidget(QLabel("Data Source:"))
-        self.source_combo = QComboBox()
-        self.source_combo.addItems(self.DATA_SOURCES.keys())
-        self.source_combo.currentTextChanged.connect(self.update_plots)
-        controls_layout.addWidget(self.source_combo)
+        # --- Controls ---
+        controls_layout.addWidget(QLabel("Data Sources:"))
+        self.source_list = QListWidget()
+        for source_name in self.DATA_SOURCES.keys():
+            item = QListWidgetItem(source_name)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(Qt.CheckState.Checked)
+            self.source_list.addItem(item)
+        self.source_list.itemChanged.connect(self.update_plots)
+        controls_layout.addWidget(self.source_list)
 
         controls_layout.addWidget(QLabel("Axes:"))
         self.axis_checkboxes = {}
@@ -53,6 +60,7 @@ class NoiseTab(QWidget):
 
         controls_layout.addStretch()
 
+        # --- Plots ---
         self.trace_plot = pg.PlotWidget(title="Time Series Trace")
         self.psd_plot = pg.PlotWidget(title="Power Spectral Density (PSD)")
         self.trace_plot.addLegend()
@@ -72,36 +80,52 @@ class NoiseTab(QWidget):
     def update_plots(self):
         self.trace_plot.clear()
         self.psd_plot.clear()
+
         if not self.logs:
             return
 
-        source_key = self.source_combo.currentText()
+        checked_sources = []
+        for i in range(self.source_list.count()):
+            item = self.source_list.item(i)
+            if item.checkState() == Qt.CheckState.Checked:
+                checked_sources.append(item.text())
 
-        for i, (filename, log_data) in enumerate(self.logs.items()):
-            color_set = self.PLOT_COLORS[i % len(self.PLOT_COLORS)]
-            short_name = os.path.basename(filename)
+        checked_axes = [axis for axis, checkbox in self.axis_checkboxes.items() if checkbox.isChecked()]
 
-            time_col = self._find_column(log_data, ['time (us)', 'time'])
-            if not time_col:
-                continue
+        color_index = 0
 
-            time_us = log_data[time_col]
-            time_s = time_us / 1_000_000
+        # Since we are comparing signals, this works best with a single log file.
+        # We'll operate on the first loaded log.
+        # TODO: Add a log file selector if multiple logs are loaded.
+        filename, log_data = next(iter(self.logs.items()))
+        short_name = os.path.basename(filename)
 
-            for axis_name in self.AXES:
-                if self.axis_checkboxes[axis_name].isChecked():
-                    possible_names = self.DATA_SOURCES[source_key][axis_name]
-                    col_name = self._find_column(log_data, possible_names)
+        time_col = self._find_column(log_data, ['time (us)', 'time'])
+        if not time_col:
+            # Optionally, display an error in a status bar or a label
+            return
 
-                    if col_name:
-                        pen = pg.mkPen(color=color_set, style=pg.QtCore.Qt.PenStyle.SolidLine)
+        time_us = log_data[time_col]
+        time_s = time_us / 1_000_000
 
-                        self.trace_plot.plot(time_s, log_data[col_name], pen=pen, name=f"{short_name} - {axis_name}")
+        for source_key in checked_sources:
+            for axis_name in checked_axes:
+                possible_names = self.DATA_SOURCES[source_key][axis_name]
+                col_name = self._find_column(log_data, possible_names)
 
-                        freq, psd = calculate_psd(log_data[col_name], time_us)
-                        if freq is not None and len(freq) > 0 and psd is not None and len(psd) > 0:
-                            psd_db = 10 * np.log10(psd)
-                            self.psd_plot.plot(freq, psd_db, pen=pen, name=f"{short_name} - {axis_name} PSD")
+                if col_name:
+                    color = self.PLOT_COLORS[color_index % len(self.PLOT_COLORS)]
+                    pen = pg.mkPen(color=color, style=Qt.PenStyle.SolidLine)
+
+                    legend_name = f"{source_key} - {axis_name}"
+                    self.trace_plot.plot(time_s, log_data[col_name], pen=pen, name=legend_name)
+
+                    freq, psd = calculate_psd(log_data[col_name], time_us)
+                    if freq is not None and len(freq) > 0 and psd is not None and len(psd) > 0:
+                        psd_db = 10 * np.log10(psd)
+                        self.psd_plot.plot(freq, psd_db, pen=pen, name=f"{legend_name} PSD")
+
+                    color_index += 1
 
     def _find_column(self, df, possible_names):
         for name in possible_names:
