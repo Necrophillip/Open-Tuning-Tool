@@ -1,7 +1,7 @@
 import os
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QComboBox, QLabel,
-    QDoubleSpinBox, QFormLayout, QSpinBox
+    QDoubleSpinBox, QFormLayout, QSpinBox, QTextEdit
 )
 import pyqtgraph as pg
 import numpy as np
