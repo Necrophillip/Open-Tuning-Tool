@@ -1,9 +1,11 @@
 import os
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QComboBox, QLabel, QDoubleSpinBox, QFormLayout
+    QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QComboBox, QLabel,
+    QDoubleSpinBox, QFormLayout, QTextEdit
 )
 import pyqtgraph as pg
-from fpv_tuner.analysis.step_response import find_step_responses
+import numpy as np
+from fpv_tuner.analysis.step_response import find_step_responses, step_response_metrics
 
 class StepResponseTab(QWidget):
     AXES_MAP = {
@@ -19,22 +21,30 @@ class StepResponseTab(QWidget):
         self.steps = []
         self.current_step_index = -1
 
+        # --- Main Layout ---
         main_layout = QVBoxLayout(self)
 
-        # --- Controls Layout ---
+        # --- Top Controls ---
         controls_container = QWidget()
         controls_layout = QHBoxLayout(controls_container)
         main_layout.addWidget(controls_container)
 
-        # --- Plot Widget ---
+        # --- Content Layout (Plot + Metrics) ---
+        content_layout = QHBoxLayout()
+        main_layout.addLayout(content_layout)
+
         self.plot_widget = pg.PlotWidget(title="Step Response")
         self.plot_widget.addLegend()
         self.plot_widget.setDownsampling(auto=True, mode='peak')
         self.plot_widget.setClipToView(True)
-        main_layout.addWidget(self.plot_widget)
+        content_layout.addWidget(self.plot_widget, 3) # 3/4 of space
 
-        # --- Controls ---
-        # Left side controls
+        self.metrics_text = QTextEdit()
+        self.metrics_text.setReadOnly(True)
+        self.metrics_text.setFontFamily("monospace")
+        content_layout.addWidget(self.metrics_text, 1) # 1/4 of space
+
+        # --- Populate Top Controls ---
         form_layout = QFormLayout()
         self.log_combo = QComboBox()
         self.axis_combo = QComboBox()
@@ -49,7 +59,6 @@ class StepResponseTab(QWidget):
         form_layout.addRow("Sensitivity:", self.threshold_spinbox)
         controls_layout.addLayout(form_layout)
 
-        # Right side navigation
         nav_layout = QHBoxLayout()
         self.prev_button = QPushButton("<< Previous")
         self.step_label = QLabel("No steps found")
@@ -119,6 +128,8 @@ class StepResponseTab(QWidget):
 
     def update_plot(self):
         self.plot_widget.clear()
+        self.metrics_text.clear()
+
         if self.current_step_index == -1:
             self.step_label.setText(f"No steps found (Threshold: {self.threshold_spinbox.value()})")
             self.prev_button.setEnabled(False)
@@ -137,17 +148,30 @@ class StepResponseTab(QWidget):
         if time_us_col is None: return
 
         time_s = log_data[time_us_col] / 1_000_000
-        self.plot_widget.addItem(pg.InfiniteLine(pos=time_s.iloc[step_idx], angle=90, movable=False, pen='gray'))
-        data_window = log_data.iloc[start:end]
-        time_window = time_s.iloc[start:end]
 
-        setpoint_col = self._find_column(log_data, [cols["setpoint"]])
-        gyro_col = self._find_column(log_data, [cols["gyro"]])
+        # Get data slices for plotting and metrics
+        time_slice = time_s.iloc[start:end].copy().reset_index(drop=True)
+        rc_slice = log_data[self._find_column(log_data, [cols["rc"]])].iloc[start:end].copy().reset_index(drop=True)
+        gyro_slice = log_data[self._find_column(log_data, [cols["gyro"]])].iloc[start:end].copy().reset_index(drop=True)
         dterm_col = self._find_column(log_data, cols["dterm"])
 
-        if setpoint_col: self.plot_widget.plot(time_window, data_window[setpoint_col], pen='c', name='Setpoint')
-        if gyro_col: self.plot_widget.plot(time_window, data_window[gyro_col], pen='y', name='Gyro')
-        if dterm_col: self.plot_widget.plot(time_window, data_window[dterm_col], pen='m', name='D-Term')
+        # Plotting
+        self.plot_widget.addItem(pg.InfiniteLine(pos=time_s.iloc[step_idx], angle=90, movable=False, pen='gray'))
+        self.plot_widget.plot(time_slice, rc_slice, pen='c', name='RC Command')
+        self.plot_widget.plot(time_slice, gyro_slice, pen='y', name='Gyro')
+        if dterm_col:
+            dterm_slice = log_data[dterm_col].iloc[start:end].copy().reset_index(drop=True)
+            self.plot_widget.plot(time_slice, dterm_slice, pen='m', name='D-Term')
+
+        # Calculate and display metrics
+        metrics = step_response_metrics(time_slice, rc_slice, gyro_slice)
+        metrics_str = "--- Step Response Metrics ---\n\n"
+        for key, value in metrics.items():
+            if isinstance(value, float):
+                metrics_str += f"{key:<20}: {value:.4f}\n"
+            else:
+                metrics_str += f"{key:<20}: {value}\n"
+        self.metrics_text.setText(metrics_str)
 
     def _find_column(self, df, possible_names):
         for name in possible_names:
