@@ -1,10 +1,10 @@
 import os
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QComboBox, QFormLayout, QTextEdit, QSpinBox
+    QWidget, QVBoxLayout, QHBoxLayout, QComboBox, QFormLayout, QTextEdit, QSpinBox, QPushButton
 )
 import pyqtgraph as pg
 import numpy as np
-from fpv_tuner.analysis.system_identification import analyze_step_response
+from fpv_tuner.analysis.system_identification import analyze_step_response, guess_optimal_params
 
 class StepResponseTab(QWidget):
     AXES_MAP = {
@@ -64,7 +64,16 @@ class StepResponseTab(QWidget):
         form_layout.addRow("Axis:", self.axis_combo)
         form_layout.addRow("Detection Threshold:", self.threshold_spinbox)
         form_layout.addRow("Noise Tolerance:", self.std_dev_spinbox)
+
+        self.auto_tune_button = QPushButton("Auto-Tune Params")
+
+        # Add a separate layout for the button to control its alignment
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+        button_layout.addWidget(self.auto_tune_button)
+
         controls_layout.addLayout(form_layout)
+        controls_layout.addLayout(button_layout)
         controls_layout.addStretch()
 
         # --- Connections ---
@@ -72,6 +81,34 @@ class StepResponseTab(QWidget):
         self.axis_combo.currentTextChanged.connect(self.run_analysis)
         self.threshold_spinbox.valueChanged.connect(self.run_analysis)
         self.std_dev_spinbox.valueChanged.connect(self.run_analysis)
+        self.auto_tune_button.clicked.connect(self.on_auto_tune_clicked)
+
+    def on_auto_tune_clicked(self):
+        log_name = self.log_combo.currentText()
+        axis_name = self.axis_combo.currentText()
+
+        if not log_name or not axis_name or not self.logs:
+            return
+
+        for path, df in self.logs.items():
+            if os.path.basename(path) == log_name:
+                log_data = df
+                break
+        else:
+            return
+
+        cols = self.AXES_MAP[axis_name]
+        rc_col = self._find_column(log_data, [cols['rc']])
+        if not rc_col:
+            return
+
+        rc_data = log_data[rc_col].to_numpy()
+
+        params = guess_optimal_params(rc_data)
+
+        self.threshold_spinbox.setValue(params['threshold'])
+        self.std_dev_spinbox.setValue(params['std_dev_max'])
+        # Setting the value will automatically trigger run_analysis due to the connection
 
     def set_data(self, logs):
         self.logs = logs
