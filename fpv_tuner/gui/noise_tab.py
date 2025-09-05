@@ -80,9 +80,9 @@ class NoiseTab(QWidget):
         self.psd_plot.setLabel('left', 'Power/Frequency (dB/Hz)')
 
         self.spectrogram_view = pg.ImageView()
-        # Use getPlotItem() to access the axes and set labels
-        self.spectrogram_view.getPlotItem().setLabel('bottom', 'Time (s)')
-        self.spectrogram_view.getPlotItem().setLabel('left', 'Frequency (Hz)')
+        # Use the .plotItem attribute to access the axes and set labels
+        self.spectrogram_view.plotItem.setLabel('bottom', 'Time (s)')
+        self.spectrogram_view.plotItem.setLabel('left', 'Frequency (Hz)')
 
         self.plot_stack = QStackedWidget()
         self.plot_stack.addWidget(self.psd_plot)
