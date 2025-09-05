@@ -6,52 +6,61 @@ from PyQt6.QtWidgets import (
     QToolBar, QStyle
 )
 from PyQt6.QtGui import QAction
-from PyQt6.QtCore import Qt, QThread
+from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from fpv_tuner.gui.worker import LogLoaderWorker
 from fpv_tuner.gui.noise_tab import NoiseTab
 from fpv_tuner.gui.trace_tab import TraceTab
 from fpv_tuner.gui.step_response_tab import StepResponseTab
 
 class MainWindow(QMainWindow):
+    start_loading = pyqtSignal(list)
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("FPV Blackbox Tuner")
         self.setGeometry(100, 100, 1400, 900)
-
         self.loaded_logs = {}
-        self.thread = None
-        self.worker = None
 
-        self.tabs = QTabWidget()
-        self.setCentralWidget(self.tabs)
-
-        self.trace_tab = TraceTab()
-        self.noise_tab = NoiseTab()
-        self.step_response_tab = StepResponseTab()
-
-        self.tabs.addTab(self.trace_tab, "Trace Viewer")
-        self.tabs.addTab(self.noise_tab, "Noise Analysis")
-        self.tabs.addTab(self.step_response_tab, "Step Response")
-
+        self._create_tabs()
         self._create_actions()
         self._create_menus()
         self._create_toolbar()
         self._create_file_manager_dock()
+        self._init_worker_thread()
+
         self.statusBar().showMessage("Ready")
 
+    def _create_tabs(self):
+        self.tabs = QTabWidget()
+        self.setCentralWidget(self.tabs)
+        self.trace_tab = TraceTab()
+        self.noise_tab = NoiseTab()
+        self.step_response_tab = StepResponseTab()
+        self.tabs.addTab(self.trace_tab, "Trace Viewer")
+        self.tabs.addTab(self.noise_tab, "Noise Analysis")
+        self.tabs.addTab(self.step_response_tab, "Step Response")
+
+    def _init_worker_thread(self):
+        self.thread = QThread()
+        self.worker = LogLoaderWorker()
+        self.worker.moveToThread(self.thread)
+        self.start_loading.connect(self.worker.process_files)
+        self.worker.finished.connect(self.on_load_finished)
+        self.worker.progress.connect(self.on_load_progress)
+        self.worker.all_finished.connect(self.on_all_loads_finished)
+        # The thread will own the worker. When the thread is deleted via deleteLater,
+        # it will clean up its children, including the worker.
+        self.thread.finished.connect(self.thread.deleteLater)
+        self.thread.start()
+
     def closeEvent(self, event):
-        """
-        Ensure the worker thread is stopped correctly before closing the window.
-        """
-        if self.thread is not None and self.thread.isRunning():
+        if self.thread.isRunning():
             self.thread.quit()
-            # Wait a reasonable amount of time for the thread to finish
-            if not self.thread.wait(1000): # 1 second timeout
+            if not self.thread.wait(1000):
                 print("Warning: Log loader thread did not terminate gracefully.")
         event.accept()
 
     def _create_actions(self):
-        # Central place for all actions
         icon = self.style().standardIcon(QStyle.StandardPixmap.SP_DialogOpenButton)
         self.open_action = QAction(icon, "&Open Blackbox Log(s)...", self)
         self.open_action.setShortcut("Ctrl+O")
@@ -71,6 +80,7 @@ class MainWindow(QMainWindow):
         menu_bar = self.menuBar()
         file_menu = menu_bar.addMenu("&File")
         file_menu.addAction(self.open_action)
+        file_menu.addAction(self.clear_action)
         file_menu.addSeparator()
         file_menu.addAction(self.exit_action)
 
@@ -94,6 +104,9 @@ class MainWindow(QMainWindow):
         self.dock.setWidget(dock_widget)
 
     def open_log_files(self):
+        if not self.open_action.isEnabled():
+            return
+
         file_paths, _ = QFileDialog.getOpenFileNames(
             self, "Open Blackbox Log Files", "", "Blackbox Logs (*.bbl *.bfl *.csv);;All Files (*)"
         )
@@ -106,17 +119,8 @@ class MainWindow(QMainWindow):
             return
 
         self.open_action.setEnabled(False)
-        self.thread = QThread()
-        self.worker = LogLoaderWorker(new_files)
-        self.worker.moveToThread(self.thread)
-
-        self.thread.started.connect(self.worker.run)
-        self.worker.finished.connect(self.on_load_finished)
-        self.worker.progress.connect(self.on_load_progress)
-        self.worker.all_finished.connect(self.on_all_loads_finished) # Connect new signal
-        self.thread.finished.connect(self.thread.deleteLater)
-
-        self.thread.start()
+        self.clear_action.setEnabled(False)
+        self.start_loading.emit(new_files)
 
     def on_load_progress(self, message):
         self.statusBar().showMessage(message)
@@ -131,20 +135,12 @@ class MainWindow(QMainWindow):
             item.setCheckState(Qt.CheckState.Checked)
             item.setData(Qt.ItemDataRole.UserRole, file_path)
             self.log_list_widget.addItem(item)
-
-        # This logic needs to be improved to check if all files from the worker are done
-        # For now, we update tabs after each file and re-enable at the end.
         self.update_all_tabs()
 
     def on_all_loads_finished(self):
-        """
-        Called when the worker has finished processing all files.
-        """
         self.open_action.setEnabled(True)
+        self.clear_action.setEnabled(True)
         self.statusBar().showMessage("Ready", 3000)
-        # self.thread and self.worker will be cleaned up by the thread.finished
-        # signal connected to deleteLater. Manually nullifying them here can
-        # cause a race condition with the garbage collector.
 
     def remove_selected_logs(self):
         for i in reversed(range(self.log_list_widget.count())):
@@ -157,9 +153,6 @@ class MainWindow(QMainWindow):
         self.update_all_tabs()
 
     def clear_all_logs(self):
-        """
-        Removes all loaded logs and clears the UI.
-        """
         self.loaded_logs.clear()
         self.log_list_widget.clear()
         self.update_all_tabs()
@@ -175,7 +168,6 @@ class MainWindow(QMainWindow):
                 file_path = item.data(Qt.ItemDataRole.UserRole)
                 if file_path in self.loaded_logs:
                     selected_logs[file_path] = self.loaded_logs[file_path]
-
         self.trace_tab.set_data(selected_logs)
         self.noise_tab.set_data(selected_logs)
         self.step_response_tab.set_data(selected_logs)
