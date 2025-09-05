@@ -3,4 +3,3 @@ pyqtgraph
 pandas
 numpy
 scipy
-matplotlib

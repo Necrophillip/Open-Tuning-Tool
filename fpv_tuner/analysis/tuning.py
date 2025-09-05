@@ -100,32 +100,56 @@ def parse_dump(file_path):
     return settings, None
 
 
-# A basic framework for parameter validation. This can be expanded significantly.
-# Ranges are conservative and may not apply to all quad sizes or firmware versions.
-SAFE_RANGES = {
-    'p_roll': (20, 150),
-    'i_roll': (20, 150),
-    'd_roll': (10, 100),
-    'f_roll': (0, 300),
-    'p_pitch': (20, 150),
-    'i_pitch': (20, 150),
-    'd_pitch': (10, 100),
-    'f_pitch': (0, 300),
-    'p_yaw': (20, 150),
-    'i_yaw': (20, 150),
-    'd_yaw': (0, 50),
-    'f_yaw': (0, 300),
-    'dterm_lpf1_static_hz': (20, 400),
-    'gyro_lpf1_static_hz': (50, 800),
+# A framework for storing drone characteristics. This allows the tuner to adapt
+# its behavior based on the type of quadcopter being tuned.
+DRONE_PROFILES = {
+    "Default": {
+        "inertia": 0.005,
+        "fitness_weights": {"overshoot": 2.0, "settling": 1.0, "rise_time": 0.5, "oscillation": 1.5},
+        "safe_ranges": {
+            'p_roll': (20, 150), 'i_roll': (20, 150), 'd_roll': (10, 100),
+            'p_pitch': (20, 150), 'i_pitch': (20, 150), 'd_pitch': (10, 100),
+            'p_yaw': (20, 150), 'i_yaw': (20, 150), 'd_yaw': (0, 50),
+        }
+    },
+    "5-inch Freestyle": {
+        "inertia": 0.005,
+        "fitness_weights": {"overshoot": 1.5, "settling": 1.0, "rise_time": 1.0, "oscillation": 1.0},
+        "safe_ranges": {
+            'p_roll': (40, 120), 'i_roll': (50, 130), 'd_roll': (30, 80),
+            'p_pitch': (40, 130), 'i_pitch': (50, 140), 'd_pitch': (35, 90),
+            'p_yaw': (40, 100), 'i_yaw': (50, 100), 'd_yaw': (0, 30),
+        }
+    },
+    "Tinywhoop (1S)": {
+        "inertia": 0.0008,
+        "fitness_weights": {"overshoot": 2.5, "settling": 1.5, "rise_time": 0.5, "oscillation": 2.0},
+        "safe_ranges": {
+            'p_roll': (20, 80), 'i_roll': (30, 90), 'd_roll': (20, 70),
+            'p_pitch': (20, 85), 'i_pitch': (30, 95), 'd_pitch': (20, 75),
+            'p_yaw': (30, 100), 'i_yaw': (40, 100), 'd_yaw': (0, 20),
+        }
+    },
+     "Cinelifter": {
+        "inertia": 0.015,
+        "fitness_weights": {"overshoot": 3.0, "settling": 2.0, "rise_time": 0.2, "oscillation": 2.5},
+        "safe_ranges": {
+            'p_roll': (50, 150), 'i_roll': (60, 160), 'd_roll': (40, 100),
+            'p_pitch': (50, 160), 'i_pitch': (60, 170), 'd_pitch': (45, 110),
+            'p_yaw': (50, 120), 'i_yaw': (50, 110), 'd_yaw': (0, 30),
+        }
+    }
 }
 
-def validate_settings(settings):
+
+def validate_settings(settings, drone_profile):
     """
-    Validates a dictionary of settings against the SAFE_RANGES.
+    Validates a dictionary of settings against the safe ranges for a given drone profile.
     Returns a list of warning strings.
     """
     warnings = []
-    for key, (min_val, max_val) in SAFE_RANGES.items():
+    safe_ranges = drone_profile.get("safe_ranges", {})
+    for key, (min_val, max_val) in safe_ranges.items():
         if key in settings:
             value = settings[key]
             if not isinstance(value, (int, float)):
@@ -133,7 +157,7 @@ def validate_settings(settings):
             if not min_val <= value <= max_val:
                 warnings.append(
                     f"Warning: '{key}' value of {value} is outside the "
-                    f"recommended safe range of ({min_val} - {max_val})."
+                    f"profile's safe range of ({min_val} - {max_val})."
                 )
     return warnings
 
@@ -152,69 +176,70 @@ def propose_tune(pids, reduction_percent=15):
     return new_pids
 
 
-def _calculate_fitness(metrics):
+def _calculate_fitness(metrics, weights):
     """
     Calculates a fitness score from a metrics dictionary. Lower is better.
     """
     if not metrics:
         return float('inf')
 
-    # Weights for each metric component. Tune these to change tuning preference.
-    WEIGHT_OVERSHOOT = 2.0
-    WEIGHT_SETTLING = 1.0
-    WEIGHT_RISE_TIME = 0.5
-    WEIGHT_OSCILLATION = 1.5
-
     # Penalize heavily for instability (NaN values or extreme overshoot)
     if np.isnan(metrics.get("Settling Time (s)", 0)) or metrics.get("Overshoot (%)", 100) > 100:
         return float('inf')
 
     score = (
-        metrics.get("Overshoot (%)", 50) * WEIGHT_OVERSHOOT +
-        metrics.get("Settling Time (s)", 1) * 100 * WEIGHT_SETTLING + # Scale time to be competitive
-        metrics.get("Rise Time (s)", 1) * 100 * WEIGHT_RISE_TIME +
-        metrics.get("Oscillation", 100) * WEIGHT_OSCILLATION
+        metrics.get("Overshoot (%)", 50) * weights.get("overshoot", 1.0) +
+        metrics.get("Settling Time (s)", 1) * 100 * weights.get("settling", 1.0) +
+        metrics.get("Rise Time (s)", 1) * 100 * weights.get("rise_time", 1.0) +
+        metrics.get("Oscillation", 100) * weights.get("oscillation", 1.0)
     )
     return score
 
 
-def find_optimal_tune(initial_pids, iterations=50):
+def find_optimal_tune(initial_pids, drone_profile, axis_to_tune, mode='RP', iterations=50):
     """
     Uses a simple hill-climbing algorithm to find a better PID tune.
     """
     best_pids = initial_pids.copy()
 
+    # Get parameters from the selected drone profile
+    inertia = drone_profile.get("inertia", 0.005)
+    fitness_weights = drone_profile.get("fitness_weights", {})
+
     # Run a baseline simulation to get the initial fitness score
-    time, response, _ = simulate_step_response(best_pids, noise_level=0.05) # Use a standard noise level for fitness
-    if time is None:
+    sim_results = simulate_step_response(best_pids, axis=axis_to_tune, inertia=inertia, noise_level=0.05)
+    if not sim_results:
         return initial_pids # Cannot simulate, return original
 
-    metrics = calculate_response_metrics(time, response)
-    best_fitness = _calculate_fitness(metrics)
+    metrics = calculate_response_metrics(sim_results["time"], sim_results["response"])
+    best_fitness = _calculate_fitness(metrics, fitness_weights)
+
+    # Determine which parameters to tweak based on the mode
+    if mode == 'RPY':
+        params_to_tweak = ['p_roll', 'd_roll', 'p_pitch', 'd_pitch', 'p_yaw', 'd_yaw']
+    else: # Default to 'RP'
+        params_to_tweak = ['p_roll', 'd_roll', 'p_pitch', 'd_pitch']
 
     for _ in range(iterations):
-        # Create a new candidate by slightly modifying the current best
         candidate_pids = best_pids.copy()
 
-        # Randomly choose to adjust P or D gain for roll or pitch
-        param_to_tweak = np.random.choice(['p_roll', 'd_roll', 'p_pitch', 'd_pitch'])
-        # Adjust by a random amount between -3 and +3
-        adjustment = np.random.randint(-3, 4)
+        param_to_tweak = np.random.choice(params_to_tweak)
+        adjustment = np.random.randint(-3, 4) # Adjust by a value between -3 and +3
 
         candidate_pids[param_to_tweak] += adjustment
 
-        # Validate the new candidate against safe ranges
-        warnings = validate_settings(candidate_pids)
+        # Validate the new candidate against the profile's safe ranges
+        warnings = validate_settings(candidate_pids, drone_profile)
         if warnings:
-            continue # Skip this candidate if it's outside safe ranges
-
-        # Simulate and calculate fitness for the candidate
-        time, response, _ = simulate_step_response(candidate_pids, noise_level=0.05)
-        if time is None:
             continue
 
-        metrics = calculate_response_metrics(time, response)
-        candidate_fitness = _calculate_fitness(metrics)
+        # Simulate and calculate fitness for the candidate
+        sim_results = simulate_step_response(candidate_pids, axis=axis_to_tune, inertia=inertia, noise_level=0.05)
+        if not sim_results:
+            continue
+
+        metrics = calculate_response_metrics(sim_results["time"], sim_results["response"])
+        candidate_fitness = _calculate_fitness(metrics, fitness_weights)
 
         # If the candidate is better, it becomes the new best
         if candidate_fitness < best_fitness:
@@ -245,7 +270,7 @@ def generate_cli(pids):
     return cli_commands
 
 
-def simulate_step_response(pids, inertia=0.005, duration=0.2, time_steps=500, noise_level=0.0,
+def simulate_step_response(pids, axis, inertia=0.005, duration=0.2, time_steps=500, noise_level=0.0,
                          disturbance_magnitude=0.0, disturbance_time=0.0):
     """
     Simulates the step response of a PID controller using a discrete-time loop.
@@ -253,6 +278,7 @@ def simulate_step_response(pids, inertia=0.005, duration=0.2, time_steps=500, no
 
     Args:
         pids (dict): A dictionary containing keys like 'p_roll', 'd_roll'.
+        axis (str): The axis to simulate ('roll', 'pitch', 'yaw').
         inertia (float): An arbitrary inertia value for the system model.
         duration (float): The duration of the simulation in seconds.
         time_steps (int): The number of time steps in the simulation.
@@ -267,16 +293,12 @@ def simulate_step_response(pids, inertia=0.005, duration=0.2, time_steps=500, no
     I_SCALE = 0.005
     D_SCALE = 0.0001
 
-    if 'p_roll' in pids:
-        Kp = pids.get('p_roll', 0) * P_SCALE
-        Ki = pids.get('i_roll', 0) * I_SCALE
-        Kd = pids.get('d_roll', 0) * D_SCALE
-    elif 'p_pitch' in pids:
-        Kp = pids.get('p_pitch', 0) * P_SCALE
-        Ki = pids.get('i_pitch', 0) * I_SCALE
-        Kd = pids.get('d_pitch', 0) * D_SCALE
-    else:
-        return None, None, None
+    try:
+        Kp = pids.get(f'p_{axis}', 0) * P_SCALE
+        Ki = pids.get(f'i_{axis}', 0) * I_SCALE
+        Kd = pids.get(f'd_{axis}', 0) * D_SCALE
+    except (KeyError, TypeError):
+         return None, None, None
 
     # Simulation parameters
     dt = duration / time_steps
@@ -304,7 +326,9 @@ def simulate_step_response(pids, inertia=0.005, duration=0.2, time_steps=500, no
 
     # Output arrays
     response = np.zeros(time_steps)
-    d_term_trace = np.zeros(time_steps)
+    p_trace = np.zeros(time_steps)
+    i_trace = np.zeros(time_steps)
+    d_trace = np.zeros(time_steps)
 
     for i in range(time_steps):
         # Add noise to the measurement of the position (simulating noisy gyro)
@@ -339,12 +363,18 @@ def simulate_step_response(pids, inertia=0.005, duration=0.2, time_steps=500, no
 
         # Store results
         response[i] = position
-        d_term_trace[i] = d_term # Store the final D-term value after filtering
+        p_trace[i] = p_term
+        i_trace[i] = i_term
+        d_trace[i] = d_term
 
         # Update state for next iteration
         previous_error = error
 
-    return t, response, d_term_trace
+    # Return a dictionary for clarity
+    return {
+        "time": t, "response": response, "p_trace": p_trace,
+        "i_trace": i_trace, "d_trace": d_trace
+    }
 
 
 def calculate_response_metrics(time, response, setpoint=1.0):
