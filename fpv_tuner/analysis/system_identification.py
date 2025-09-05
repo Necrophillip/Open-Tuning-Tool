@@ -34,24 +34,28 @@ def second_order_step_model(t, K, wn, zeta):
 # ------------------------------
 # Main Analysis Function
 # ------------------------------
-def analyze_axis_response(time, rc_command, gyro_response, threshold_ratio=0.7):
+def analyze_axis_response(axis_name, time, rc_command, gyro_response, threshold_ratio=0.7):
     """
     Analyzes a single axis to find the average, normalized step response and fit system models.
     Returns a dictionary with analysis results.
     """
+    print(f"\n--- Analyzing {axis_name} ---")
     dt = np.mean(np.diff(time))
     if np.isnan(dt) or dt == 0:
         return {"error": "Invalid time data"}
 
     # --- Step 1: Detect large deflections ---
     max_rc = np.max(np.abs(rc_command))
+    print(f"Max RC command: {max_rc:.2f}")
     if max_rc == 0:
         return {"error": "No RC command input"}
 
     thresh = threshold_ratio * max_rc
+    print(f"Detection threshold: {thresh:.2f}")
     deflex_mask = np.abs(rc_command) > thresh
     # Find indices where the mask goes from False to True
     starts = np.where(np.diff(deflex_mask.astype(int)) == 1)[0]
+    print(f"Found {len(starts)} potential step starts.")
 
     if len(starts) == 0:
         return {"error": f"No deflections found above threshold {thresh:.0f}"}
