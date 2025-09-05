@@ -39,6 +39,17 @@ class MainWindow(QMainWindow):
         self._create_file_manager_dock()
         self.statusBar().showMessage("Ready")
 
+    def closeEvent(self, event):
+        """
+        Ensure the worker thread is stopped correctly before closing the window.
+        """
+        if self.thread is not None and self.thread.isRunning():
+            self.thread.quit()
+            # Wait a reasonable amount of time for the thread to finish
+            if not self.thread.wait(1000): # 1 second timeout
+                print("Warning: Log loader thread did not terminate gracefully.")
+        event.accept()
+
     def _create_actions(self):
         # Central place for all actions
         icon = self.style().standardIcon(QStyle.StandardPixmap.SP_DialogOpenButton)
@@ -46,6 +57,11 @@ class MainWindow(QMainWindow):
         self.open_action.setShortcut("Ctrl+O")
         self.open_action.setStatusTip("Open one or more log files")
         self.open_action.triggered.connect(self.open_log_files)
+
+        clear_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_TrashIcon)
+        self.clear_action = QAction(clear_icon, "&Clear All Logs", self)
+        self.clear_action.setStatusTip("Remove all loaded logs")
+        self.clear_action.triggered.connect(self.clear_all_logs)
 
         self.exit_action = QAction("&Exit", self)
         self.exit_action.setStatusTip("Exit the application")
@@ -62,6 +78,7 @@ class MainWindow(QMainWindow):
         toolbar = QToolBar("Main Toolbar")
         self.addToolBar(toolbar)
         toolbar.addAction(self.open_action)
+        toolbar.addAction(self.clear_action)
 
     def _create_file_manager_dock(self):
         self.dock = QDockWidget("Loaded Logs", self)
@@ -96,6 +113,7 @@ class MainWindow(QMainWindow):
         self.thread.started.connect(self.worker.run)
         self.worker.finished.connect(self.on_load_finished)
         self.worker.progress.connect(self.on_load_progress)
+        self.worker.all_finished.connect(self.on_all_loads_finished) # Connect new signal
         self.thread.finished.connect(self.thread.deleteLater)
 
         self.thread.start()
@@ -118,10 +136,15 @@ class MainWindow(QMainWindow):
         # For now, we update tabs after each file and re-enable at the end.
         self.update_all_tabs()
 
-        # A simple way to check if the worker is done
-        if not self.thread.isRunning():
-             self.open_action.setEnabled(True)
-             self.statusBar().showMessage("Ready", 3000)
+    def on_all_loads_finished(self):
+        """
+        Called when the worker has finished processing all files.
+        """
+        self.open_action.setEnabled(True)
+        self.statusBar().showMessage("Ready", 3000)
+        # It's good practice to nullify the thread/worker after they are done
+        self.thread = None
+        self.worker = None
 
     def remove_selected_logs(self):
         for i in reversed(range(self.log_list_widget.count())):
@@ -131,6 +154,14 @@ class MainWindow(QMainWindow):
                 if file_path in self.loaded_logs:
                     del self.loaded_logs[file_path]
                 self.log_list_widget.takeItem(i)
+        self.update_all_tabs()
+
+    def clear_all_logs(self):
+        """
+        Removes all loaded logs and clears the UI.
+        """
+        self.loaded_logs.clear()
+        self.log_list_widget.clear()
         self.update_all_tabs()
 
     def on_log_selection_changed(self, item):

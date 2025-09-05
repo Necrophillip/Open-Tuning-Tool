@@ -8,6 +8,7 @@ class LogLoaderWorker(QObject):
     # Signal: finished(file_path, dataframe, error_string)
     finished = pyqtSignal(str, object, str)
     progress = pyqtSignal(str)
+    all_finished = pyqtSignal() # New signal
 
     def __init__(self, file_paths):
         super().__init__()
@@ -27,3 +28,4 @@ class LogLoaderWorker(QObject):
                 self.finished.emit(file_path, None, str(e))
 
         self.progress.emit("Ready")
+        self.all_finished.emit() # Emit the new signal
