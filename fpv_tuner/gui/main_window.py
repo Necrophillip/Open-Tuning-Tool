@@ -142,9 +142,9 @@ class MainWindow(QMainWindow):
         """
         self.open_action.setEnabled(True)
         self.statusBar().showMessage("Ready", 3000)
-        # It's good practice to nullify the thread/worker after they are done
-        self.thread = None
-        self.worker = None
+        # self.thread and self.worker will be cleaned up by the thread.finished
+        # signal connected to deleteLater. Manually nullifying them here can
+        # cause a race condition with the garbage collector.
 
     def remove_selected_logs(self):
         for i in reversed(range(self.log_list_widget.count())):
