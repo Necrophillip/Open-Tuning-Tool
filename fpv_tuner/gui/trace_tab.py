@@ -4,28 +4,46 @@ import pyqtgraph as pg
 
 class TraceTab(QWidget):
     PLOT_COLORS = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b']
+    AXES_MAPPING = {
+        'Roll':  {'rc': 'rcCommand[0]', 'gyro': 'gyroADC[0]', 'dterm': ['dTerm[0]', 'axisD[0]']},
+        'Pitch': {'rc': 'rcCommand[1]', 'gyro': 'gyroADC[1]', 'dterm': ['dTerm[1]', 'axisD[1]']},
+        'Yaw':   {'rc': 'rcCommand[2]', 'gyro': 'gyroADC[2]', 'dterm': ['dTerm[2]', 'axisD[2]']},
+    }
 
     def __init__(self):
         super().__init__()
         self.logs = {}
 
         layout = QVBoxLayout(self)
-        self.plot_widget = pg.PlotWidget(title="Raw Gyro and RC Command")
-        self.plot_widget.addLegend()
-        self.plot_widget.setDownsampling(auto=True, mode='peak')
-        self.plot_widget.setClipToView(True)
-        layout.addWidget(self.plot_widget)
+        # Use GraphicsLayoutWidget for multiple subplots
+        self.win = pg.GraphicsLayoutWidget(title="Trace Viewer")
+        layout.addWidget(self.win)
+
+        # Create 3 plot items
+        self.plots = []
+        for i, axis_name in enumerate(self.AXES_MAPPING.keys()):
+            p = self.win.addPlot(row=i, col=0)
+            p.setLabel('left', axis_name)
+            p.addLegend()
+            self.plots.append(p)
+            # Link X axes
+            if i > 0:
+                p.setXLink(self.plots[0])
+
+        self.plots[-1].setLabel('bottom', 'Time (s)')
+
 
     def set_data(self, logs):
         self.logs = logs
         self.update_plots()
 
     def update_plots(self):
-        self.plot_widget.clear()
+        # Clear all plots first
+        for p in self.plots:
+            p.clear()
+
         if not self.logs:
             return
-
-        self.plot_widget.setLabel('bottom', 'Time (s)')
 
         for i, (filename, log_data) in enumerate(self.logs.items()):
             color = self.PLOT_COLORS[i % len(self.PLOT_COLORS)]
@@ -37,19 +55,22 @@ class TraceTab(QWidget):
 
             time_s = log_data[time_col] / 1_000_000
 
-            # Plot Gyro data
-            self._plot_axis_data(log_data, time_s, 'gyroADC', color, short_name)
-            # Plot RC Command data (optional, can be noisy)
-            # self._plot_axis_data(log_data, time_s, 'rcCommand', color, short_name)
+            # Iterate through each axis and its corresponding plot
+            for plot_idx, (axis_name, cols) in enumerate(self.AXES_MAPPING.items()):
+                current_plot = self.plots[plot_idx]
 
-    def _plot_axis_data(self, df, time_s, prefix, color, log_name):
-        # Let's just plot Roll and Pitch for clarity
-        for i in range(2): # 0 for Roll, 1 for Pitch
-            col_name = self._find_column(df, [f'{prefix}[{i}]'])
-            if col_name:
-                # Use a slightly different style for the second axis if needed
-                pen = pg.mkPen(color=color, style=pg.QtCore.Qt.PenStyle.SolidLine if i == 0 else pg.QtCore.Qt.PenStyle.DotLine)
-                self.plot_widget.plot(time_s, df[col_name], pen=pen, name=f"{log_name} - {col_name}")
+                # Get columns for this axis
+                rc_col = self._find_column(log_data, [cols['rc']])
+                gyro_col = self._find_column(log_data, [cols['gyro']])
+                dterm_col = self._find_column(log_data, cols['dterm'])
+
+                # Plot data
+                if rc_col:
+                    current_plot.plot(time_s, log_data[rc_col], pen=pg.mkPen(color, style=pg.QtCore.Qt.PenStyle.SolidLine), name=f"{short_name} - RC Command")
+                if gyro_col:
+                    current_plot.plot(time_s, log_data[gyro_col], pen=pg.mkPen(color, style=pg.QtCore.Qt.PenStyle.DashLine), name=f"{short_name} - Gyro")
+                if dterm_col:
+                    current_plot.plot(time_s, log_data[dterm_col], pen=pg.mkPen(color, style=pg.QtCore.Qt.PenStyle.DotLine), name=f"{short_name} - D-Term")
 
     def _find_column(self, df, possible_names):
         for name in possible_names:
