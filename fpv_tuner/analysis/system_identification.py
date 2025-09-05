@@ -119,3 +119,40 @@ def analyze_step_response(time_data, rc_data, gyro_data, dterm_data=None, thresh
         "dterm_slice": dterm_slice_np,
         "error": None
     }
+
+def guess_optimal_params(rc_data):
+    """
+    Analyzes the rc_data to guess optimal parameters for step detection.
+    """
+    if rc_data is None or len(rc_data) < 100: # Need enough data to analyze
+        return {'threshold': 30, 'std_dev_max': 50} # Return safe defaults
+
+    rc_series = pd.Series(rc_data)
+    diffs = rc_series.diff().abs()
+
+    # Guess threshold
+    non_zero_diffs = diffs[diffs > 1] # Ignore minor noise
+    if not non_zero_diffs.empty:
+        # A value that is larger than most noise but smaller than a real step
+        guessed_threshold = int(np.percentile(non_zero_diffs, 90))
+    else:
+        guessed_threshold = 30 # Fallback
+
+    # Clamp threshold to a reasonable range
+    guessed_threshold = max(10, min(guessed_threshold, 200))
+
+    # Guess std_dev_max
+    # Find quiet periods (where change is minimal)
+    quiet_indices = diffs[diffs < 5].index
+    if len(quiet_indices) > 50:
+        # Calculate std dev in these quiet periods
+        noise_level = rc_series[quiet_indices].std()
+        # Set tolerance to a multiple of the noise level
+        guessed_std_dev = int(noise_level * 4)
+    else:
+        guessed_std_dev = 50 # Fallback
+
+    # Clamp std_dev_max to a reasonable range
+    guessed_std_dev = max(10, min(guessed_std_dev, 200))
+
+    return {'threshold': guessed_threshold, 'std_dev_max': guessed_std_dev}
