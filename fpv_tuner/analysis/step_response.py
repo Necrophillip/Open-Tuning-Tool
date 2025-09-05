@@ -47,15 +47,11 @@ def find_step_responses(rc_command, time_us, threshold=300, min_step_duration_ms
         start_idx = i - pre_indices
         end_idx = i + post_indices
 
-        pre_step_segment = rc_command.iloc[start_idx:i]
-        post_step_segment = rc_command.iloc[i:end_idx]
-
-        # Check for stability before and after the step
-        if pre_step_segment.std() < 50 and post_step_segment.std() < 50:
-            # Check if the step holds for the minimum duration
-            if end_idx - i > min_duration_indices:
-                found_steps.append((start_idx, i, end_idx))
-                last_step_end = end_idx
+        # The stability check is removed to be more lenient with real-world, noisy logs.
+        # The user can now control the window size from the GUI.
+        if end_idx - i > min_duration_indices:
+            found_steps.append((start_idx, i, end_idx))
+            last_step_end = end_idx
 
     print(f"Found {len(found_steps)} potential step responses.")
     return found_steps

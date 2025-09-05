@@ -1,7 +1,7 @@
 import os
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QComboBox, QLabel,
-    QDoubleSpinBox, QFormLayout, QTextEdit
+    QDoubleSpinBox, QFormLayout, QSpinBox
 )
 import pyqtgraph as pg
 import numpy as np
@@ -21,15 +21,11 @@ class StepResponseTab(QWidget):
         self.steps = []
         self.current_step_index = -1
 
-        # --- Main Layout ---
         main_layout = QVBoxLayout(self)
-
-        # --- Top Controls ---
         controls_container = QWidget()
         controls_layout = QHBoxLayout(controls_container)
         main_layout.addWidget(controls_container)
 
-        # --- Content Layout (Plot + Metrics) ---
         content_layout = QHBoxLayout()
         main_layout.addLayout(content_layout)
 
@@ -37,26 +33,38 @@ class StepResponseTab(QWidget):
         self.plot_widget.addLegend()
         self.plot_widget.setDownsampling(auto=True, mode='peak')
         self.plot_widget.setClipToView(True)
-        content_layout.addWidget(self.plot_widget, 3) # 3/4 of space
+        content_layout.addWidget(self.plot_widget, 3)
 
         self.metrics_text = QTextEdit()
         self.metrics_text.setReadOnly(True)
         self.metrics_text.setFontFamily("monospace")
-        content_layout.addWidget(self.metrics_text, 1) # 1/4 of space
+        content_layout.addWidget(self.metrics_text, 1)
 
-        # --- Populate Top Controls ---
         form_layout = QFormLayout()
         self.log_combo = QComboBox()
         self.axis_combo = QComboBox()
         self.axis_combo.addItems(self.AXES_MAP.keys())
         self.threshold_spinbox = QDoubleSpinBox()
         self.threshold_spinbox.setRange(50, 1000)
-        self.threshold_spinbox.setValue(400)
+        self.threshold_spinbox.setValue(300)
         self.threshold_spinbox.setSingleStep(25)
         self.threshold_spinbox.setSuffix(" (Threshold)")
+
+        self.pre_window_spinbox = QSpinBox()
+        self.pre_window_spinbox.setRange(10, 200)
+        self.pre_window_spinbox.setValue(20)
+        self.pre_window_spinbox.setSuffix(" ms (Pre-Window)")
+
+        self.post_window_spinbox = QSpinBox()
+        self.post_window_spinbox.setRange(50, 1000)
+        self.post_window_spinbox.setValue(200)
+        self.post_window_spinbox.setSuffix(" ms (Post-Window)")
+
         form_layout.addRow("Log File:", self.log_combo)
         form_layout.addRow("Axis:", self.axis_combo)
         form_layout.addRow("Sensitivity:", self.threshold_spinbox)
+        form_layout.addRow("Window:", self.pre_window_spinbox)
+        form_layout.addRow("", self.post_window_spinbox)
         controls_layout.addLayout(form_layout)
 
         nav_layout = QHBoxLayout()
@@ -69,10 +77,11 @@ class StepResponseTab(QWidget):
         controls_layout.addLayout(nav_layout)
         controls_layout.addStretch()
 
-        # --- Connections ---
         self.log_combo.currentTextChanged.connect(self.on_log_selection_change)
         self.axis_combo.currentTextChanged.connect(self.analyze_axis)
         self.threshold_spinbox.valueChanged.connect(self.analyze_axis)
+        self.pre_window_spinbox.valueChanged.connect(self.analyze_axis)
+        self.post_window_spinbox.valueChanged.connect(self.analyze_axis)
         self.prev_button.clicked.connect(self.prev_step)
         self.next_button.clicked.connect(self.next_step)
 
@@ -107,10 +116,19 @@ class StepResponseTab(QWidget):
         axis = self.axis_combo.currentText()
         rc_col = self._find_column(log_data, [self.AXES_MAP[axis]["rc"]])
         time_col = self._find_column(log_data, ['time (us)', 'time'])
+
         threshold = self.threshold_spinbox.value()
+        pre_ms = self.pre_window_spinbox.value()
+        post_ms = self.post_window_spinbox.value()
 
         if rc_col and time_col:
-            self.steps = find_step_responses(log_data[rc_col], log_data[time_col], threshold=threshold)
+            self.steps = find_step_responses(
+                log_data[rc_col],
+                log_data[time_col],
+                threshold=threshold,
+                pre_step_flat_ms=pre_ms,
+                post_step_flat_ms=post_ms
+            )
 
         if self.steps:
             self.current_step_index = 0
@@ -131,7 +149,7 @@ class StepResponseTab(QWidget):
         self.metrics_text.clear()
 
         if self.current_step_index == -1:
-            self.step_label.setText(f"No steps found (Threshold: {self.threshold_spinbox.value()})")
+            self.step_label.setText("No steps found")
             self.prev_button.setEnabled(False)
             self.next_button.setEnabled(False)
             return
@@ -149,13 +167,11 @@ class StepResponseTab(QWidget):
 
         time_s = log_data[time_us_col] / 1_000_000
 
-        # Get data slices for plotting and metrics
         time_slice = time_s.iloc[start:end].copy().reset_index(drop=True)
         rc_slice = log_data[self._find_column(log_data, [cols["rc"]])].iloc[start:end].copy().reset_index(drop=True)
         gyro_slice = log_data[self._find_column(log_data, [cols["gyro"]])].iloc[start:end].copy().reset_index(drop=True)
         dterm_col = self._find_column(log_data, cols["dterm"])
 
-        # Plotting
         self.plot_widget.addItem(pg.InfiniteLine(pos=time_s.iloc[step_idx], angle=90, movable=False, pen='gray'))
         self.plot_widget.plot(time_slice, rc_slice, pen='c', name='RC Command')
         self.plot_widget.plot(time_slice, gyro_slice, pen='y', name='Gyro')
@@ -163,7 +179,6 @@ class StepResponseTab(QWidget):
             dterm_slice = log_data[dterm_col].iloc[start:end].copy().reset_index(drop=True)
             self.plot_widget.plot(time_slice, dterm_slice, pen='m', name='D-Term')
 
-        # Calculate and display metrics
         metrics = step_response_metrics(time_slice, rc_slice, gyro_slice)
         metrics_str = "--- Step Response Metrics ---\n\n"
         for key, value in metrics.items():
