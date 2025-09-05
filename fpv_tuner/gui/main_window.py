@@ -11,6 +11,7 @@ from fpv_tuner.gui.worker import LogLoaderWorker
 from fpv_tuner.gui.noise_tab import NoiseTab
 from fpv_tuner.gui.trace_tab import TraceTab
 from fpv_tuner.gui.step_response_tab import StepResponseTab
+from fpv_tuner.gui.tuning_tab import TuningTab
 
 class MainWindow(QMainWindow):
     start_loading = pyqtSignal(list)
@@ -39,6 +40,8 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.trace_tab, "Trace Viewer")
         self.tabs.addTab(self.noise_tab, "Noise Analysis")
         self.tabs.addTab(self.step_response_tab, "Step Response")
+        self.tuning_tab = TuningTab()
+        self.tabs.addTab(self.tuning_tab, "PID Tuning")
 
     def _init_worker_thread(self):
         self.thread = QThread()
@@ -171,3 +174,4 @@ class MainWindow(QMainWindow):
         self.trace_tab.set_data(selected_logs)
         self.noise_tab.set_data(selected_logs)
         self.step_response_tab.set_data(selected_logs)
+        self.tuning_tab.set_data(selected_logs) # Keep consistent interface
