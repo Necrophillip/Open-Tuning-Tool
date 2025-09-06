@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt
 import pyqtgraph as pg
 
-from fpv_tuner.analysis.tuning import DRONE_PROFILES, parse_dump, tune_with_sliders, generate_cli, simulate_step_response, validate_settings, calculate_response_metrics
+from fpv_tuner.analysis.tuning import DRONE_PROFILES, parse_dump, tune_with_sliders, generate_cli, simulate_step_response, validate_settings, calculate_response_metrics, classify_step_response
 
 class TuningTab(QWidget):
     dump_filepath = None
@@ -113,8 +113,15 @@ class TuningTab(QWidget):
         self.noise_level_spinbox.setValue(0.05)
         self.noise_level_spinbox.setEnabled(False)
         self.wind_gust_button = QPushButton("Simulate Wind Gust")
+        self.duration_spinbox = QDoubleSpinBox()
+        self.duration_spinbox.setRange(0.2, 5.0)
+        self.duration_spinbox.setSingleStep(0.1)
+        self.duration_spinbox.setValue(1.0)
+        self.duration_spinbox.setSuffix(" s")
+
         layout.addRow(self.noise_checkbox)
         layout.addRow("Noise Level:", self.noise_level_spinbox)
+        layout.addRow("Duration:", self.duration_spinbox)
         layout.addWidget(self.wind_gust_button)
         parent_layout.addWidget(group)
 
@@ -148,6 +155,10 @@ class TuningTab(QWidget):
         metrics_layout.addRow("Settling Time (s):", self._create_metric_row(self.metrics_settling_time_current, self.metrics_settling_time_proposed))
         metrics_layout.addRow("Oscillation:", self._create_metric_row(self.metrics_oscillation_current, self.metrics_oscillation_proposed))
 
+        self.classification_current = QLabel("N/A")
+        self.classification_proposed = QLabel("N/A")
+        metrics_layout.addRow("Classification:", self._create_metric_row(self.classification_current, self.classification_proposed))
+
         bottom_layout.addWidget(metrics_group)
         cli_group = QGroupBox("CLI Commands")
         cli_layout = QVBoxLayout(cli_group)
@@ -179,6 +190,7 @@ class TuningTab(QWidget):
 
         self.noise_checkbox.toggled.connect(lambda: self.run_simulations_and_update_cli())
         self.noise_level_spinbox.valueChanged.connect(lambda: self.run_simulations_and_update_cli())
+        self.duration_spinbox.valueChanged.connect(lambda: self.run_simulations_and_update_cli())
         self.axis_combo.currentTextChanged.connect(lambda: self.run_simulations_and_update_cli())
         self.profile_combo.currentTextChanged.connect(lambda: self.run_simulations_and_update_cli())
 
@@ -254,12 +266,15 @@ class TuningTab(QWidget):
         drone_profile = DRONE_PROFILES.get(profile_name, DRONE_PROFILES["Default"])
         axis_to_simulate = self.axis_combo.currentText().lower()
         noise_level = self.noise_level_spinbox.value() if self.noise_checkbox.isChecked() else 0.0
+        duration = self.duration_spinbox.value()
         inertia = drone_profile.get("inertia", 0.005)
 
-        sim_before = simulate_step_response(self.current_pids, axis_to_simulate, inertia, noise_level=noise_level, disturbance_magnitude=disturbance_magnitude, disturbance_time=disturbance_time)
+        sim_before = simulate_step_response(self.current_pids, axis_to_simulate, inertia, duration=duration, noise_level=noise_level, disturbance_magnitude=disturbance_magnitude, disturbance_time=disturbance_time)
         if sim_before and sim_before.get("time") is not None:
             self.plot_widget.plot(sim_before["time"], sim_before["response"], pen='r', name='Current Response')
-            self._update_metrics_display(calculate_response_metrics(sim_before["time"], sim_before["response"]), is_current=True)
+            metrics = calculate_response_metrics(sim_before["time"], sim_before["response"])
+            self._update_metrics_display(metrics, is_current=True)
+            self._update_classification_display(metrics, is_current=True)
 
         if is_initial_run: return
 
@@ -268,13 +283,16 @@ class TuningTab(QWidget):
             for term in ["p", "i", "d"]:
                 self.proposed_pids[f"{term}_{axis}"] = self.pid_widgets[f"proposed_{term}_{axis}"].value()
 
-        sim_after = simulate_step_response(self.proposed_pids, axis_to_simulate, inertia, noise_level=noise_level, disturbance_magnitude=disturbance_magnitude, disturbance_time=disturbance_time)
+        sim_after = simulate_step_response(self.proposed_pids, axis_to_simulate, inertia, duration=duration, noise_level=noise_level, disturbance_magnitude=disturbance_magnitude, disturbance_time=disturbance_time)
         if sim_after and sim_after.get("time") is not None:
             self.plot_widget.plot(sim_after["time"], sim_after["response"], pen='g', name='Proposed Response')
             self.plot_widget.plot(sim_after["time"], sim_after["p_trace"], pen={'color': (0, 100, 255, 150), 'style': Qt.PenStyle.DashLine}, name='P Term (Proposed)')
             self.plot_widget.plot(sim_after["time"], sim_after["i_trace"], pen={'color': (255, 0, 255, 150), 'style': Qt.PenStyle.DashLine}, name='I Term (Proposed)')
-            self.plot_widget.plot(sim_after["time"], sim_after["d_trace"], pen={'color': (0, 255, 255, 150), 'style': Qt.PenStyle.DashLine}, name='D Term (Proposed)')
-            self._update_metrics_display(calculate_response_metrics(sim_after["time"], sim_after["response"]), is_current=False)
+            # D-Term trace removed as requested
+            # self.plot_widget.plot(sim_after["time"], sim_after["d_trace"], pen={'color': (0, 255, 255, 150), 'style': Qt.PenStyle.DashLine}, name='D Term (Proposed)')
+            metrics = calculate_response_metrics(sim_after["time"], sim_after["response"])
+            self._update_metrics_display(metrics, is_current=False)
+            self._update_classification_display(metrics, is_current=False)
 
         self.cli_output_text.setText(generate_cli(self.proposed_pids))
         warnings = validate_settings(self.proposed_pids, drone_profile)
@@ -292,6 +310,12 @@ class TuningTab(QWidget):
             self.metrics_rise_time_proposed.setText(f"{metrics.get('Rise Time (s)', 0):.4f}")
             self.metrics_settling_time_proposed.setText(f"{metrics.get('Settling Time (s)', 0):.4f}")
             self.metrics_oscillation_proposed.setText(f"{metrics.get('Oscillation', 0):.2f}")
+
+    def _update_classification_display(self, metrics, is_current=True):
+        text, color = classify_step_response(metrics)
+        label = self.classification_current if is_current else self.classification_proposed
+        label.setText(text)
+        label.setStyleSheet(f"color: {color}; font-weight: bold;")
 
     def set_data(self, logs):
         pass
