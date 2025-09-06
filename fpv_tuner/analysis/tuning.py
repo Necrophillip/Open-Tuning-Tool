@@ -4,8 +4,9 @@ from scipy.signal import lti, step
 
 def parse_dump(file_path):
     """
-    Parses a Betaflight dump file to extract a comprehensive set of tuning parameters.
-    It prioritizes settings under the active profile but also reads global settings.
+    Parses a Betaflight dump file to extract a comprehensive set of tuning parameters
+    and the firmware version. It prioritizes settings under the active profile but
+    also reads global settings.
     """
 
     # Comprehensive list of parameters we want to extract
@@ -28,6 +29,7 @@ def parse_dump(file_path):
     }
 
     settings = {}
+    firmware_version = None
     active_profile_id = -1
     profile_settings = {}
     global_settings = {}
@@ -36,33 +38,33 @@ def parse_dump(file_path):
         with open(file_path, 'r') as f:
             lines = f.readlines()
 
-        # Find the active profile ID first
+        # Find the active profile ID and firmware version first
         for line in lines:
-            if line.strip().startswith('profile '):
-                active_profile_id = int(line.strip().split(' ')[1])
-                break
-        if active_profile_id == -1: active_profile_id = 0 # Default to 0 if not found
+            stripped_line = line.strip()
+            if stripped_line.startswith('# Betaflight /'):
+                firmware_version = stripped_line.strip('# ').strip()
+            if stripped_line.startswith('profile '):
+                active_profile_id = int(stripped_line.split(' ')[1])
 
-        # Parse the entire file, separating global and profile-specific settings
+        if active_profile_id == -1: active_profile_id = 0
+
+        # Parse the entire file for settings
         in_profile_block = False
         current_profile_id = -1
         for line in lines:
-            line = line.strip()
+            stripped_line = line.strip()
 
-            # Check for profile block start
-            if line.startswith('# profile '):
+            if stripped_line.startswith('# profile '):
                 in_profile_block = True
-                current_profile_id = int(line.split(' ')[2])
+                current_profile_id = int(stripped_line.split(' ')[2])
                 continue
 
-            # Check for profile block end
-            if in_profile_block and (line.startswith('#') or not line):
+            if in_profile_block and (stripped_line.startswith('#') or not stripped_line):
                 in_profile_block = False
                 current_profile_id = -1
                 continue
 
-            # Match any 'set' command
-            match = re.match(r'set\s+([\w_]+)\s+=\s+([\w\d.-]+)', line)
+            match = re.match(r'set\s+([\w_]+)\s+=\s+([\w\d.-]+)', stripped_line)
             if not match:
                 continue
 
@@ -71,33 +73,31 @@ def parse_dump(file_path):
             if key not in TARGET_KEYS:
                 continue
 
-            # Try to convert value to a number, otherwise keep as string
             try:
                 if '.' in value:
                     value = float(value)
                 else:
                     value = int(value)
             except ValueError:
-                pass # Keep as string (e.g., for filter types like 'PT1')
+                pass
 
             if in_profile_block and current_profile_id == active_profile_id:
                 profile_settings[key] = value
             else:
                 global_settings[key] = value
 
-        # Merge settings: profile settings override global settings
         settings = global_settings.copy()
         settings.update(profile_settings)
 
     except FileNotFoundError:
-        return None, f"Dump file not found at '{file_path}'"
+        return None, None, f"Dump file not found at '{file_path}'"
     except Exception as e:
-        return None, f"An error occurred while parsing: {e}"
+        return None, None, f"An error occurred while parsing: {e}"
 
     if not settings:
-        return None, "Could not find any relevant tuning settings in the dump file."
+        return None, firmware_version, "Could not find any relevant tuning settings in the dump file."
 
-    return settings, None
+    return settings, firmware_version, None
 
 
 # A framework for storing drone characteristics. This allows the tuner to adapt
@@ -142,22 +142,34 @@ DRONE_PROFILES = {
 }
 
 
-def validate_settings(settings, drone_profile):
+def validate_settings(proposed_pids, original_pids, drone_profile):
     """
-    Validates a dictionary of settings against the safe ranges for a given drone profile.
+    Validates proposed PIDs against relative and absolute safe ranges.
     Returns a list of warning strings.
     """
     warnings = []
     safe_ranges = drone_profile.get("safe_ranges", {})
+
+    # Relative (multiplier) checks
+    for key in proposed_pids:
+        if key in original_pids and original_pids[key] > 0 and key.startswith(('p_', 'i_', 'd_')):
+            ratio = proposed_pids[key] / original_pids[key]
+            if not (0.5 <= ratio <= 1.7):
+                warnings.append(
+                    f"'{key}' ({proposed_pids[key]}) is {ratio:.2f}x the original value. "
+                    f"(Recommended range: 0.5x - 1.7x)"
+                )
+
+    # Absolute (hard limit) checks
     for key, (min_val, max_val) in safe_ranges.items():
-        if key in settings:
-            value = settings[key]
+        if key in proposed_pids:
+            value = proposed_pids[key]
             if not isinstance(value, (int, float)):
-                continue # Cannot validate non-numeric types like 'PT1'
+                continue
             if not min_val <= value <= max_val:
                 warnings.append(
-                    f"Warning: '{key}' value of {value} is outside the "
-                    f"profile's safe range of ({min_val} - {max_val})."
+                    f"'{key}' ({value}) is outside the profile's absolute "
+                    f"safe range of ({min_val} - {max_val})."
                 )
     return warnings
 

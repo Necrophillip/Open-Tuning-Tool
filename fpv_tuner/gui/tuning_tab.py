@@ -9,9 +9,14 @@ from PyQt6.QtCore import Qt
 import pyqtgraph as pg
 
 from fpv_tuner.analysis.tuning import DRONE_PROFILES, parse_dump, tune_with_sliders, generate_cli, simulate_step_response, validate_settings, calculate_response_metrics, classify_step_response
+from fpv_tuner.analysis.blackbox_parser import get_blackbox_headers
 
 class TuningTab(QWidget):
     dump_filepath = None
+    dump_version = None
+    bb_log_path = None
+    bb_log_version = None
+
     current_pids = {}
     proposed_pids = {}
 
@@ -28,6 +33,7 @@ class TuningTab(QWidget):
         self._create_pid_controls(left_panel_layout)
         self._create_slider_display(left_panel_layout)
         self._create_simulation_controls(left_panel_layout)
+        self._create_warning_display(left_panel_layout)
         left_panel_layout.addStretch()
 
         self._create_plot_controls(right_panel_layout)
@@ -39,8 +45,15 @@ class TuningTab(QWidget):
         layout = QVBoxLayout(group)
         self.load_dump_button = QPushButton("Load Betaflight Dump File...")
         self.dump_file_label = QLabel("No file loaded.")
+        self.load_bb_button = QPushButton("Load Blackbox CSV Log...")
+        self.bb_file_label = QLabel("No file loaded.")
+        self.version_status_label = QLabel("Versions: N/A")
+
         layout.addWidget(self.load_dump_button)
         layout.addWidget(self.dump_file_label)
+        layout.addWidget(self.load_bb_button)
+        layout.addWidget(self.bb_file_label)
+        layout.addWidget(self.version_status_label)
         parent_layout.addWidget(group)
 
     def _create_scope_controls(self, parent_layout):
@@ -125,6 +138,16 @@ class TuningTab(QWidget):
         layout.addWidget(self.wind_gust_button)
         parent_layout.addWidget(group)
 
+    def _create_warning_display(self, parent_layout):
+        group = QGroupBox("7. Warnings")
+        layout = QVBoxLayout(group)
+        self.warning_text_area = QTextEdit()
+        self.warning_text_area.setReadOnly(True)
+        self.warning_text_area.setStyleSheet("QTextEdit { color: red; }")
+        self.warning_text_area.setVisible(False) # Hide when no warnings
+        layout.addWidget(self.warning_text_area)
+        parent_layout.addWidget(group)
+
     def _create_plot_controls(self, parent_layout):
         self.plot_widget = pg.PlotWidget(title="Simulated Step Response")
         self.plot_widget.addLegend()
@@ -179,6 +202,7 @@ class TuningTab(QWidget):
 
     def _connect_signals(self):
         self.load_dump_button.clicked.connect(self.on_load_dump)
+        self.load_bb_button.clicked.connect(self.on_load_blackbox)
         self.propose_button.clicked.connect(self.on_generate_proposal)
         self.update_simulation_button.clicked.connect(lambda: self.run_simulations_and_update_cli())
         self.wind_gust_button.clicked.connect(self.on_simulate_wind_gust)
@@ -205,17 +229,45 @@ class TuningTab(QWidget):
             except Exception as e:
                 QMessageBox.warning(self, "Backup Failed", f"Could not create a backup of the dump file.\n\n{e}")
 
-        pids, error = parse_dump(filepath)
+        pids, version, error = parse_dump(filepath)
         if error:
             QMessageBox.critical(self, "Error Parsing Dump", error)
             return
 
         self.dump_filepath = filepath
         self.current_pids = pids
+        self.dump_version = version
         self.dump_file_label.setText(os.path.basename(filepath))
         self.propose_button.setEnabled(True)
         self.update_ui_with_pids(self.current_pids, target='all')
         self.run_simulations_and_update_cli(is_initial_run=True)
+        self._check_versions()
+
+    def on_load_blackbox(self):
+        filepath, _ = QFileDialog.getOpenFileName(self, "Open Blackbox CSV Log", "", "CSV Files (*.csv);;All Files (*)")
+        if not filepath: return
+
+        headers = get_blackbox_headers(filepath)
+        self.bb_log_version = headers.get("Firmware version")
+        self.bb_log_path = filepath
+        self.bb_file_label.setText(os.path.basename(filepath))
+        self._check_versions()
+
+    def _check_versions(self):
+        if not self.dump_version and not self.bb_log_version:
+            self.version_status_label.setText("Versions: N/A")
+            return
+
+        if self.dump_version and self.bb_log_version:
+            if self.dump_version == self.bb_log_version:
+                self.version_status_label.setText("Versions Match!")
+                self.version_status_label.setStyleSheet("color: green;")
+            else:
+                self.version_status_label.setText("Versions Mismatch!")
+                self.version_status_label.setStyleSheet("color: red;")
+        else:
+            self.version_status_label.setText("Versions: Waiting for other file...")
+            self.version_status_label.setStyleSheet("")
 
     def update_ui_with_pids(self, pids, target='all'):
         for axis in ["roll", "pitch", "yaw"]:
@@ -295,9 +347,15 @@ class TuningTab(QWidget):
             self._update_classification_display(metrics, is_current=False)
 
         self.cli_output_text.setText(generate_cli(self.proposed_pids))
-        warnings = validate_settings(self.proposed_pids, drone_profile)
+
+        # --- Validation ---
+        warnings = validate_settings(self.proposed_pids, self.current_pids, drone_profile)
         if warnings:
-            QMessageBox.warning(self, "Safety Warning", "The following proposed values are outside of the recommended safe ranges:\n\n" + "\n".join(warnings))
+            self.warning_text_area.setText("ATTENTION:\n" + "\n".join(warnings))
+            self.warning_text_area.setVisible(True)
+        else:
+            self.warning_text_area.clear()
+            self.warning_text_area.setVisible(False)
 
     def _update_metrics_display(self, metrics, is_current=True):
         if is_current:
