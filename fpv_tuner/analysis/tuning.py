@@ -344,7 +344,7 @@ def generate_cli(pids):
     return cli_commands
 
 
-def simulate_step_response(pids, axis, inertia=0.005, duration=0.2, time_steps=500, noise_level=0.0,
+def simulate_step_response(pids, axis, inertia=0.005, duration=1.0, time_steps=1000, noise_level=0.0,
                          disturbance_magnitude=0.0, disturbance_time=0.0):
     """
     Simulates the step response of a PID controller using a discrete-time loop.
@@ -510,3 +510,28 @@ def calculate_response_metrics(time, response, setpoint=1.0):
         "Settling Time (s)": settling_time,
         "Oscillation": oscillation
     }
+
+
+def classify_step_response(metrics):
+    """
+    Analyzes response metrics to classify the system's behavior.
+    Returns a text description and a color hint.
+    """
+    if not metrics or any(np.isnan(v) for v in metrics.values()):
+        return "Unstable or Incomplete", "red"
+
+    overshoot = metrics.get("Overshoot (%)", 0)
+    oscillation = metrics.get("Oscillation", 0)
+    rise_time = metrics.get("Rise Time (s)", 1.0)
+
+    if overshoot > 15 or oscillation > 10:
+        return "Oscillatory / High Overshoot", "red"
+    elif overshoot > 5:
+        return "Underdamped (noticeable overshoot)", "orange"
+    elif overshoot >= 0:
+        if rise_time < 0.08:
+             return "Critically Damped (Optimal)", "green"
+        else:
+             return "Slightly Overdamped (Slow)", "yellow"
+    else: # Overshoot is negative
+        return "Overdamped (Very Sluggish)", "blue"
