@@ -1,10 +1,13 @@
 import os
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QComboBox, QFormLayout, QTextEdit, QSpinBox, QPushButton
+    QWidget, QVBoxLayout, QHBoxLayout, QComboBox, QFormLayout, QTextEdit, QSpinBox, QPushButton,
+    QSlider, QLabel
 )
+from PyQt6.QtCore import Qt
 import pyqtgraph as pg
 import numpy as np
 from fpv_tuner.analysis.system_identification import analyze_step_response, guess_optimal_params
+from fpv_tuner.analysis.utils import apply_smoothing
 
 class StepResponseTab(QWidget):
     AXES_MAP = {
@@ -65,6 +68,25 @@ class StepResponseTab(QWidget):
         form_layout.addRow("Detection Threshold:", self.threshold_spinbox)
         form_layout.addRow("Noise Tolerance:", self.std_dev_spinbox)
 
+        self.duration_spinbox = QSpinBox()
+        self.duration_spinbox.setRange(50, 2000)
+        self.duration_spinbox.setValue(100)
+        self.duration_spinbox.setSingleStep(50)
+        self.duration_spinbox.setSuffix(" ms")
+        form_layout.addRow("Post-Step Duration:", self.duration_spinbox)
+
+        smoothing_layout = QHBoxLayout()
+        smoothing_layout.addWidget(QLabel("Smoothing Level:"))
+        self.smoothing_slider = QSlider(Qt.Orientation.Horizontal)
+        self.smoothing_slider.setRange(0, 20)
+        self.smoothing_slider.setValue(0)
+        self.smoothing_slider.setTickInterval(5)
+        self.smoothing_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self.smoothing_label = QLabel("Raw")
+        smoothing_layout.addWidget(self.smoothing_slider)
+        smoothing_layout.addWidget(self.smoothing_label)
+        form_layout.addRow(smoothing_layout)
+
         self.auto_tune_button = QPushButton("Auto-Tune Params")
 
         # Add a separate layout for the button to control its alignment
@@ -81,7 +103,16 @@ class StepResponseTab(QWidget):
         self.axis_combo.currentTextChanged.connect(self.run_analysis)
         self.threshold_spinbox.valueChanged.connect(self.run_analysis)
         self.std_dev_spinbox.valueChanged.connect(self.run_analysis)
+        self.duration_spinbox.valueChanged.connect(self.run_analysis)
         self.auto_tune_button.clicked.connect(self.on_auto_tune_clicked)
+        self.smoothing_slider.valueChanged.connect(self.on_smoothing_changed)
+
+    def on_smoothing_changed(self, value):
+        if value == 0:
+            self.smoothing_label.setText("Raw")
+        else:
+            self.smoothing_label.setText(f"Level {value}")
+        self.run_analysis()
 
     def on_auto_tune_clicked(self):
         log_name = self.log_combo.currentText()
@@ -169,8 +200,9 @@ class StepResponseTab(QWidget):
         # --- Run Analysis ---
         threshold = self.threshold_spinbox.value()
         std_dev_max = self.std_dev_spinbox.value()
+        duration_ms = self.duration_spinbox.value()
         results = analyze_step_response(
-            time_data, rc_data, gyro_data, dterm_data, threshold=threshold, std_dev_max=std_dev_max
+            time_data, rc_data, gyro_data, dterm_data, threshold=threshold, std_dev_max=std_dev_max, post_step_duration_ms=duration_ms
         )
 
         # --- Display Results ---
@@ -181,12 +213,21 @@ class StepResponseTab(QWidget):
             return
 
         # Plotting
-        self.plot_widget.plot(results["time_slice"], results["rc_slice"], pen=self.PLOT_COLORS['rc'], name='RC Command')
-        self.plot_widget.plot(results["time_slice"], results["gyro_slice"], pen=self.PLOT_COLORS['gyro'], name='Gyro Response')
-        if results["dterm_slice"] is not None:
-            self.plot_widget.plot(results["time_slice"], results["dterm_slice"], pen=pg.mkPen(self.PLOT_COLORS['dterm'], style=pg.QtCore.Qt.PenStyle.DashLine), name='D-Term')
+        smoothing_level = self.smoothing_slider.value()
 
-        # Metrics
+        time_slice_s = results["time_slice"] # Already in seconds
+
+        rc_data_smoothed = apply_smoothing(results["rc_slice"], smoothing_level)
+        gyro_data_smoothed = apply_smoothing(results["gyro_slice"], smoothing_level)
+
+        self.plot_widget.plot(time_slice_s, rc_data_smoothed, pen=self.PLOT_COLORS['rc'], name='RC Command', autoDownsample=False)
+        self.plot_widget.plot(time_slice_s, gyro_data_smoothed, pen=self.PLOT_COLORS['gyro'], name='Gyro Response', autoDownsample=False)
+
+        if results["dterm_slice"] is not None:
+            dterm_data_smoothed = apply_smoothing(results["dterm_slice"], smoothing_level)
+            self.plot_widget.plot(time_slice_s, dterm_data_smoothed, pen=pg.mkPen(self.PLOT_COLORS['dterm'], style=pg.QtCore.Qt.PenStyle.DashLine), name='D-Term', autoDownsample=False)
+
+        # Metrics are calculated on raw data, so they remain correct
         metrics = results["metrics"]
         metrics_text = f"--- {axis_name} Step Metrics ---\n"
         for key, value in metrics.items():

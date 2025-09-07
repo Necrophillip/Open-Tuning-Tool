@@ -244,7 +244,7 @@ def tune_with_sliders(base_pids, drone_profile, axis_to_tune, iterations=50):
         current_pids = _compute_pids_from_sliders(base_pids, sliders)
 
         # Validate the new PIDs
-        warnings = validate_settings(current_pids, drone_profile)
+        warnings = validate_settings(current_pids, base_pids, drone_profile)
         if warnings:
             print(f"Iteration {i}: Unsafe PIDs generated, stopping.")
             break # Stop if we've gone into an unsafe region
