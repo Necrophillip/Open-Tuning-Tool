@@ -58,7 +58,7 @@ def _decode_blackbox_log(file_path):
     except Exception as e:
         return None, None, f"Failed to create temporary directory: {e}"
 
-    command = ['blackbox_decode', file_path, '--output-dir', temp_dir, '--no-interpolate']
+    command = ['blackbox_decode', file_path, '--output-dir', temp_dir]
 
     try:
         print(f"Running command: {' '.join(command)}")
