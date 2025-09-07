@@ -10,6 +10,7 @@ import pyqtgraph as pg
 
 from fpv_tuner.analysis.tuning import DRONE_PROFILES, parse_dump, tune_with_sliders, generate_cli, simulate_step_response, validate_settings, calculate_response_metrics, classify_step_response
 from fpv_tuner.analysis.blackbox_parser import get_blackbox_headers
+from fpv_tuner.blackbox.loader import _decode_blackbox_log
 
 class TuningTab(QWidget):
     dump_filepath = None
@@ -135,6 +136,16 @@ class TuningTab(QWidget):
         layout.addRow(self.noise_checkbox)
         layout.addRow("Noise Level:", self.noise_level_spinbox)
         layout.addRow("Duration:", self.duration_spinbox)
+
+        self.smoothing_slider = QSlider(Qt.Orientation.Horizontal)
+        self.smoothing_slider.setRange(0, 20)
+        self.smoothing_slider.setValue(0)
+        self.smoothing_label = QLabel("Raw")
+        smoothing_layout = QHBoxLayout()
+        smoothing_layout.addWidget(self.smoothing_slider)
+        smoothing_layout.addWidget(self.smoothing_label)
+        layout.addRow("Plot Smoothing:", smoothing_layout)
+
         layout.addWidget(self.wind_gust_button)
         parent_layout.addWidget(group)
 
@@ -217,6 +228,14 @@ class TuningTab(QWidget):
         self.duration_spinbox.valueChanged.connect(lambda: self.run_simulations_and_update_cli())
         self.axis_combo.currentTextChanged.connect(lambda: self.run_simulations_and_update_cli())
         self.profile_combo.currentTextChanged.connect(lambda: self.run_simulations_and_update_cli())
+        self.smoothing_slider.valueChanged.connect(self.on_smoothing_label_changed)
+        self.smoothing_slider.valueChanged.connect(lambda: self.run_simulations_and_update_cli())
+
+    def on_smoothing_label_changed(self, value):
+        if value == 0:
+            self.smoothing_label.setText("Raw")
+        else:
+            self.smoothing_label.setText(f"Level {value}")
 
     def on_load_dump(self):
         filepath, _ = QFileDialog.getOpenFileName(self, "Open Betaflight Dump", "", "Text Files (*.txt);;All Files (*)")
@@ -244,14 +263,37 @@ class TuningTab(QWidget):
         self._check_versions()
 
     def on_load_blackbox(self):
-        filepath, _ = QFileDialog.getOpenFileName(self, "Open Blackbox CSV Log", "", "CSV Files (*.csv);;All Files (*)")
+        filepath, _ = QFileDialog.getOpenFileName(self, "Open Blackbox Log", "", "Blackbox Logs (*.bbl *.bfl *.csv);;All Files (*)")
         if not filepath: return
 
-        headers = get_blackbox_headers(filepath)
+        temp_dir = None
+        # If it's a raw log, decode it first
+        if os.path.splitext(filepath)[1].lower() in ['.bbl', '.bfl']:
+            self.setCursor(Qt.CursorShape.WaitCursor)
+            csv_path, temp_dir, error = _decode_blackbox_log(filepath)
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+
+            if error:
+                QMessageBox.critical(self, "Error Decoding Log", error)
+                if temp_dir and os.path.exists(temp_dir):
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+                return
+
+            # The path we want to parse headers from is the new temp CSV
+            path_to_parse = csv_path
+        else:
+            # It's already a CSV
+            path_to_parse = filepath
+
+        headers = get_blackbox_headers(path_to_parse)
         self.bb_log_version = headers.get("Firmware version")
-        self.bb_log_path = filepath
+        self.bb_log_path = filepath # Still store the original path
         self.bb_file_label.setText(os.path.basename(filepath))
         self._check_versions()
+
+        # Clean up temporary directory if one was created
+        if temp_dir and os.path.exists(temp_dir):
+            shutil.rmtree(temp_dir, ignore_errors=True)
 
     def _check_versions(self):
         if not self.dump_version and not self.bb_log_version:
@@ -323,7 +365,9 @@ class TuningTab(QWidget):
 
         sim_before = simulate_step_response(self.current_pids, axis_to_simulate, inertia, duration=duration, noise_level=noise_level, disturbance_magnitude=disturbance_magnitude, disturbance_time=disturbance_time)
         if sim_before and sim_before.get("time") is not None:
-            self.plot_widget.plot(sim_before["time"], sim_before["response"], pen='r', name='Current Response')
+            smoothing_level = self.smoothing_slider.value()
+            response_smoothed = apply_smoothing(sim_before["response"], smoothing_level)
+            self.plot_widget.plot(sim_before["time"], response_smoothed, pen='r', name='Current Response')
             metrics = calculate_response_metrics(sim_before["time"], sim_before["response"])
             self._update_metrics_display(metrics, is_current=True)
             self._update_classification_display(metrics, is_current=True)
@@ -337,12 +381,18 @@ class TuningTab(QWidget):
 
         sim_after = simulate_step_response(self.proposed_pids, axis_to_simulate, inertia, duration=duration, noise_level=noise_level, disturbance_magnitude=disturbance_magnitude, disturbance_time=disturbance_time)
         if sim_after and sim_after.get("time") is not None:
-            self.plot_widget.plot(sim_after["time"], sim_after["response"], pen='g', name='Proposed Response')
-            self.plot_widget.plot(sim_after["time"], sim_after["p_trace"], pen={'color': (0, 100, 255, 150), 'style': Qt.PenStyle.DashLine}, name='P Term (Proposed)')
-            self.plot_widget.plot(sim_after["time"], sim_after["i_trace"], pen={'color': (255, 0, 255, 150), 'style': Qt.PenStyle.DashLine}, name='I Term (Proposed)')
-            # D-Term trace removed as requested
-            # self.plot_widget.plot(sim_after["time"], sim_after["d_trace"], pen={'color': (0, 255, 255, 150), 'style': Qt.PenStyle.DashLine}, name='D Term (Proposed)')
-            metrics = calculate_response_metrics(sim_after["time"], sim_after["response"])
+            smoothing_level = self.smoothing_slider.value()
+            response_smoothed = apply_smoothing(sim_after["response"], smoothing_level)
+            p_trace_smoothed = apply_smoothing(sim_after["p_trace"], smoothing_level)
+            i_trace_smoothed = apply_smoothing(sim_after["i_trace"], smoothing_level)
+
+            self.plot_widget.plot(sim_after["time"], response_smoothed, pen='g', name='Proposed Response')
+            self.plot_widget.plot(sim_after["time"], p_trace_smoothed, pen={'color': (0, 100, 255, 150), 'style': Qt.PenStyle.DashLine}, name='P Term (Proposed)')
+            self.plot_widget.plot(sim_after["time"], i_trace_smoothed, pen={'color': (255, 0, 255, 150), 'style': Qt.PenStyle.DashLine}, name='I Term (Proposed)')
+            d_trace_smoothed = apply_smoothing(sim_after["d_trace"], smoothing_level)
+            self.plot_widget.plot(sim_after["time"], d_trace_smoothed, pen={'color': (0, 255, 255, 150), 'style': Qt.PenStyle.DashLine}, name='D Term (Proposed)')
+
+            metrics = calculate_response_metrics(sim_after["time"], sim_after["response"]) # Metrics on raw data
             self._update_metrics_display(metrics, is_current=False)
             self._update_classification_display(metrics, is_current=False)
 

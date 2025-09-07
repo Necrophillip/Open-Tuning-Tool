@@ -3,11 +3,12 @@ import numpy as np
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
     QListWidget, QListWidgetItem, QComboBox, QFormLayout, QPushButton,
-    QStackedWidget, QTextEdit
+    QStackedWidget, QTextEdit, QSlider
 )
 from PyQt6.QtCore import Qt
 import pyqtgraph as pg
 from fpv_tuner.analysis.noise import calculate_psd, calculate_spectrogram, calculate_signal_stats
+from fpv_tuner.analysis.utils import apply_smoothing
 
 class NoiseTab(QWidget):
     SIGNAL_MAP = {
@@ -42,6 +43,18 @@ class NoiseTab(QWidget):
         self.nperseg_combo.setCurrentText("1024")
         nperseg_layout.addRow("PSD/DSA Resolution:", self.nperseg_combo)
         controls_layout.addLayout(nperseg_layout)
+
+        smoothing_layout = QHBoxLayout()
+        smoothing_layout.addWidget(QLabel("Smoothing Level:"))
+        self.smoothing_slider = QSlider(Qt.Orientation.Horizontal)
+        self.smoothing_slider.setRange(0, 20)
+        self.smoothing_slider.setValue(0)
+        self.smoothing_slider.setTickInterval(5)
+        self.smoothing_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self.smoothing_label = QLabel("Raw")
+        smoothing_layout.addWidget(self.smoothing_slider)
+        smoothing_layout.addWidget(self.smoothing_label)
+        controls_layout.addLayout(smoothing_layout)
 
         self.view_toggle_button = QPushButton("Show Spectrogram (DSA)")
         controls_layout.addWidget(self.view_toggle_button)
@@ -95,6 +108,14 @@ class NoiseTab(QWidget):
         self.nperseg_combo.currentTextChanged.connect(self.update_plots)
         self.signal_list.itemChanged.connect(self.update_plots)
         self.view_toggle_button.clicked.connect(self.on_toggle_view_clicked)
+        self.smoothing_slider.valueChanged.connect(self.on_smoothing_changed)
+
+    def on_smoothing_changed(self, value):
+        if value == 0:
+            self.smoothing_label.setText("Raw")
+        else:
+            self.smoothing_label.setText(f"Level {value}")
+        self.update_plots()
 
     def set_data(self, logs):
         self.logs = logs
@@ -137,9 +158,12 @@ class NoiseTab(QWidget):
                 if col_name:
                     color = self.PLOT_COLORS[i % len(self.PLOT_COLORS)]
                     pen = pg.mkPen(color=color)
-                    signal_data = log_data[col_name]
 
-                    self.trace_plot.plot(time_s, signal_data, pen=pen, name=signal_name)
+                    signal_data = log_data[col_name]
+                    smoothed_signal = apply_smoothing(signal_data, self.smoothing_slider.value())
+
+                    self.trace_plot.plot(time_s, smoothed_signal, pen=pen, name=signal_name, autoDownsample=False)
+                    # PSD should be calculated on raw data, not smoothed data
                     freq, psd = calculate_psd(signal_data, time_us, nperseg=nperseg)
 
                     stats = {}
@@ -170,8 +194,10 @@ class NoiseTab(QWidget):
             col_name = self._find_column(log_data, possible_names)
             if col_name:
                 signal_data = log_data[col_name]
-                self.trace_plot.plot(time_s, signal_data, pen='w', name=signal_name)
+                smoothed_signal = apply_smoothing(signal_data, self.smoothing_slider.value())
+                self.trace_plot.plot(time_s, smoothed_signal, pen='w', name=signal_name, autoDownsample=False)
 
+                # Spectrogram should also be calculated on raw data
                 freqs, times, Sxx = calculate_spectrogram(signal_data, time_us, nperseg=nperseg)
 
                 if freqs is not None and times is not None and Sxx is not None:

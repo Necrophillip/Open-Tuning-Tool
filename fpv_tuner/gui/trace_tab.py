@@ -1,6 +1,8 @@
 import os
-from PyQt6.QtWidgets import QWidget, QVBoxLayout
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSlider
+from PyQt6.QtCore import Qt
 import pyqtgraph as pg
+from fpv_tuner.analysis.utils import apply_smoothing
 
 class TraceTab(QWidget):
     PLOT_COLORS = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b']
@@ -15,6 +17,21 @@ class TraceTab(QWidget):
         self.logs = {}
 
         layout = QVBoxLayout(self)
+
+        # --- Controls ---
+        controls_layout = QHBoxLayout()
+        controls_layout.addWidget(QLabel("Smoothing Level:"))
+        self.smoothing_slider = QSlider(Qt.Orientation.Horizontal)
+        self.smoothing_slider.setRange(0, 20) # 0 = Raw, up to 20
+        self.smoothing_slider.setValue(0)
+        self.smoothing_slider.setTickInterval(5)
+        self.smoothing_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self.smoothing_label = QLabel("Raw")
+        controls_layout.addWidget(self.smoothing_slider)
+        controls_layout.addWidget(self.smoothing_label)
+        controls_layout.addStretch()
+        layout.addLayout(controls_layout)
+
         # Use GraphicsLayoutWidget for multiple subplots
         self.win = pg.GraphicsLayoutWidget(title="Trace Viewer")
         layout.addWidget(self.win)
@@ -29,9 +46,17 @@ class TraceTab(QWidget):
             # Link X axes
             if i > 0:
                 p.setXLink(self.plots[0])
-
         self.plots[-1].setLabel('bottom', 'Time (s)')
 
+        # --- Connections ---
+        self.smoothing_slider.valueChanged.connect(self.on_smoothing_changed)
+
+    def on_smoothing_changed(self, value):
+        if value == 0:
+            self.smoothing_label.setText("Raw")
+        else:
+            self.smoothing_label.setText(f"Level {value}")
+        self.update_plots()
 
     def set_data(self, logs):
         self.logs = logs
@@ -56,6 +81,7 @@ class TraceTab(QWidget):
             time_s = log_data[time_col] / 1_000_000
 
             # Iterate through each axis and its corresponding plot
+            smoothing_level = self.smoothing_slider.value()
             for plot_idx, (axis_name, cols) in enumerate(self.AXES_MAPPING.items()):
                 current_plot = self.plots[plot_idx]
 
@@ -66,11 +92,14 @@ class TraceTab(QWidget):
 
                 # Plot data
                 if rc_col:
-                    current_plot.plot(time_s, log_data[rc_col], pen=pg.mkPen(color, style=pg.QtCore.Qt.PenStyle.SolidLine), name=f"{short_name} - RC Command")
+                    data = apply_smoothing(log_data[rc_col], smoothing_level)
+                    current_plot.plot(time_s, data, pen=pg.mkPen(color, style=pg.QtCore.Qt.PenStyle.SolidLine), name=f"{short_name} - RC Command", autoDownsample=False)
                 if gyro_col:
-                    current_plot.plot(time_s, log_data[gyro_col], pen=pg.mkPen(color, style=pg.QtCore.Qt.PenStyle.DashLine), name=f"{short_name} - Gyro")
+                    data = apply_smoothing(log_data[gyro_col], smoothing_level)
+                    current_plot.plot(time_s, data, pen=pg.mkPen(color, style=pg.QtCore.Qt.PenStyle.DashLine), name=f"{short_name} - Gyro", autoDownsample=False)
                 if dterm_col:
-                    current_plot.plot(time_s, log_data[dterm_col], pen=pg.mkPen(color, style=pg.QtCore.Qt.PenStyle.DotLine), name=f"{short_name} - D-Term")
+                    data = apply_smoothing(log_data[dterm_col], smoothing_level)
+                    current_plot.plot(time_s, data, pen=pg.mkPen(color, style=pg.QtCore.Qt.PenStyle.DotLine), name=f"{short_name} - D-Term", autoDownsample=False)
 
     def _find_column(self, df, possible_names):
         for name in possible_names:
