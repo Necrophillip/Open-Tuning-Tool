@@ -3,7 +3,7 @@ import shutil
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QTextEdit, QSpinBox, QPushButton,
     QFileDialog, QGroupBox, QLabel, QMessageBox, QCheckBox, QDoubleSpinBox, QGridLayout,
-    QComboBox
+    QComboBox, QSlider
 )
 from PyQt6.QtCore import Qt
 import pyqtgraph as pg
