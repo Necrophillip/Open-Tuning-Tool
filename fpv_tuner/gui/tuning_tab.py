@@ -11,6 +11,7 @@ import pyqtgraph as pg
 from fpv_tuner.analysis.tuning import DRONE_PROFILES, parse_dump, tune_with_sliders, generate_cli, simulate_step_response, validate_settings, calculate_response_metrics, classify_step_response
 from fpv_tuner.analysis.blackbox_parser import get_blackbox_headers
 from fpv_tuner.blackbox.loader import _decode_blackbox_log
+from fpv_tuner.analysis.utils import apply_smoothing
 
 class TuningTab(QWidget):
     dump_filepath = None

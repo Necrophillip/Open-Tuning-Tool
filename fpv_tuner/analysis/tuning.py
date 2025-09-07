@@ -152,7 +152,11 @@ def validate_settings(proposed_pids, original_pids, drone_profile):
 
     # Relative (multiplier) checks
     for key in proposed_pids:
-        if key in original_pids and original_pids[key] > 0 and key.startswith(('p_', 'i_', 'd_')):
+        if key in original_pids and isinstance(original_pids[key], (int, float)) and original_pids[key] > 0 and key.startswith(('p_', 'i_', 'd_')):
+            # Ensure the proposed value is also a number before dividing
+            if not isinstance(proposed_pids[key], (int, float)):
+                continue
+
             ratio = proposed_pids[key] / original_pids[key]
             if not (0.5 <= ratio <= 1.7):
                 warnings.append(
