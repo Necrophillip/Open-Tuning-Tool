@@ -3,7 +3,7 @@ import shutil
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QTextEdit, QSpinBox, QPushButton,
     QFileDialog, QGroupBox, QLabel, QMessageBox, QCheckBox, QDoubleSpinBox, QGridLayout,
-    QComboBox, QSlider
+    QComboBox, QSlider, QScrollArea
 )
 from PyQt6.QtCore import Qt
 import pyqtgraph as pg
@@ -25,10 +25,13 @@ class TuningTab(QWidget):
     def __init__(self):
         super().__init__()
         main_layout = QHBoxLayout(self)
-        left_panel_layout = QVBoxLayout()
-        right_panel_layout = QVBoxLayout()
-        main_layout.addLayout(left_panel_layout, 2)
-        main_layout.addLayout(right_panel_layout, 5)
+
+        # --- Left Panel with Scroll Area ---
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+
+        left_panel_container = QWidget()
+        left_panel_layout = QVBoxLayout(left_panel_container)
 
         self._create_load_controls(left_panel_layout)
         self._create_scope_controls(left_panel_layout)
@@ -38,8 +41,17 @@ class TuningTab(QWidget):
         self._create_warning_display(left_panel_layout)
         left_panel_layout.addStretch()
 
+        scroll_area.setWidget(left_panel_container)
+
+        # --- Right Panel ---
+        right_panel_layout = QVBoxLayout()
         self._create_plot_controls(right_panel_layout)
         self._create_bottom_right_controls(right_panel_layout)
+
+        # --- Main Layout Assembly ---
+        main_layout.addWidget(scroll_area, 2) # Add scroll area with stretch factor
+        main_layout.addLayout(right_panel_layout, 5)
+
         self._connect_signals()
 
     def _create_load_controls(self, parent_layout):
