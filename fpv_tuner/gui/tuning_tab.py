@@ -200,6 +200,7 @@ class TuningTab(QWidget):
         self.cli_output_text = QTextEdit()
         self.cli_output_text.setReadOnly(True)
         self.cli_output_text.setFontFamily("monospace")
+        self.cli_output_text.setMaximumHeight(150) # Prevent this widget from expanding the window
         cli_layout.addWidget(self.cli_output_text)
         bottom_layout.addWidget(cli_group)
         parent_layout.addLayout(bottom_layout, 1)
