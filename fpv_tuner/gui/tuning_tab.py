@@ -8,7 +8,12 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt
 import pyqtgraph as pg
 
-from fpv_tuner.analysis.tuning import DRONE_PROFILES, parse_dump, tune_with_sliders, generate_cli, simulate_step_response, validate_settings, calculate_response_metrics, classify_step_response
+from fpv_tuner.analysis.tuning import (
+    DRONE_PROFILES, parse_dump, tune_with_sliders, generate_cli,
+    simulate_step_response, validate_settings, calculate_response_metrics,
+    classify_step_response, extract_step_response_from_log,
+    tune_from_blackbox, tune_from_cli_and_blackbox
+)
 from fpv_tuner.analysis.blackbox_parser import get_blackbox_headers
 from fpv_tuner.blackbox.loader import _decode_blackbox_log
 from fpv_tuner.analysis.utils import apply_smoothing
@@ -21,6 +26,7 @@ class TuningTab(QWidget):
 
     current_pids = {}
     proposed_pids = {}
+    loaded_logs = {}
 
     def __init__(self):
         super().__init__()
@@ -57,16 +63,36 @@ class TuningTab(QWidget):
     def _create_load_controls(self, parent_layout):
         group = QGroupBox("1. Load Configuration")
         layout = QVBoxLayout(group)
-        self.load_dump_button = QPushButton("Load Betaflight Dump File...")
-        self.dump_file_label = QLabel("No file loaded.")
-        self.load_bb_button = QPushButton("Load Blackbox CSV Log...")
-        self.bb_file_label = QLabel("No file loaded.")
-        self.version_status_label = QLabel("Versions: N/A")
 
-        layout.addWidget(self.load_dump_button)
-        layout.addWidget(self.dump_file_label)
-        layout.addWidget(self.load_bb_button)
-        layout.addWidget(self.bb_file_label)
+        # CLI loading
+        cli_layout = QHBoxLayout()
+        self.load_dump_button = QPushButton("Load CLI File")
+        self.load_dump_button.setFixedWidth(150)
+        self.dump_file_label = QLabel("No file loaded.")
+        cli_layout.addWidget(self.load_dump_button)
+        cli_layout.addWidget(self.dump_file_label)
+        layout.addLayout(cli_layout)
+
+        # This widget will contain either the button or the combo box
+        self.bbl_load_widget = QWidget()
+        bbl_load_layout = QHBoxLayout(self.bbl_load_widget)
+        bbl_load_layout.setContentsMargins(0, 0, 0, 0)
+
+        # BBL button for direct loading
+        self.load_bb_button = QPushButton("Load .BBL File")
+        self.load_bb_button.setFixedWidth(150)
+        self.bb_file_label = QLabel("No file loaded.")
+        bbl_load_layout.addWidget(self.load_bb_button)
+        bbl_load_layout.addWidget(self.bb_file_label)
+
+        # Pre-loaded BBL selection
+        self.bb_log_combo = QComboBox()
+        bbl_load_layout.addWidget(self.bb_log_combo)
+        self.bb_log_combo.setVisible(False)  # Hide initially
+
+        layout.addWidget(self.bbl_load_widget)
+
+        self.version_status_label = QLabel("Versions: N/A")
         layout.addWidget(self.version_status_label)
         parent_layout.addWidget(group)
 
@@ -244,6 +270,7 @@ class TuningTab(QWidget):
         self.profile_combo.currentTextChanged.connect(lambda: self.run_simulations_and_update_cli())
         self.smoothing_slider.valueChanged.connect(self.on_smoothing_label_changed)
         self.smoothing_slider.valueChanged.connect(lambda: self.run_simulations_and_update_cli())
+        self.bb_log_combo.currentIndexChanged.connect(self.on_bbl_log_selected)
 
     def on_smoothing_label_changed(self, value):
         if value == 0:
@@ -276,10 +303,23 @@ class TuningTab(QWidget):
         self.run_simulations_and_update_cli(is_initial_run=True)
         self._check_versions()
 
+    def on_bbl_log_selected(self, index):
+        filepath = self.bb_log_combo.itemData(index)
+        if not filepath:
+            self.bb_log_path = None
+            self.bb_log_version = None
+            self._check_versions()
+            return
+
+        # This will handle header parsing and UI updates
+        self._process_bbl_file(filepath)
+
     def on_load_blackbox(self):
         filepath, _ = QFileDialog.getOpenFileName(self, "Open Blackbox Log", "", "Blackbox Logs (*.bbl *.bfl *.csv);;All Files (*)")
         if not filepath: return
+        self._process_bbl_file(filepath)
 
+    def _process_bbl_file(self, filepath):
         temp_dir = None
         # If it's a raw log, decode it first
         if os.path.splitext(filepath)[1].lower() in ['.bbl', '.bfl']:
@@ -292,11 +332,8 @@ class TuningTab(QWidget):
                 if temp_dir and os.path.exists(temp_dir):
                     shutil.rmtree(temp_dir, ignore_errors=True)
                 return
-
-            # The path we want to parse headers from is the new temp CSV
             path_to_parse = csv_path
-        else:
-            # It's already a CSV
+        else: # It's already a CSV
             path_to_parse = filepath
 
         headers = get_blackbox_headers(path_to_parse)
@@ -337,24 +374,49 @@ class TuningTab(QWidget):
                     self.pid_widgets[widget_key].setValue(pids.get(pid_key, 0))
 
     def on_generate_proposal(self):
-        if not self.current_pids: return
+        has_cli = bool(self.dump_filepath)
+        has_bbl = bool(self.bb_log_path)
+
+        if not has_cli and not has_bbl:
+            QMessageBox.warning(self, "No Data", "Please load a CLI dump or a Blackbox log file first.")
+            return
 
         self.setCursor(Qt.CursorShape.WaitCursor)
         profile_name = self.profile_combo.currentText()
         drone_profile = DRONE_PROFILES.get(profile_name, DRONE_PROFILES["Default"])
         axis_to_tune = self.axis_combo.currentText().lower()
 
-        self.proposed_pids, sliders = tune_with_sliders(
-            self.current_pids, drone_profile, axis_to_tune
-        )
+        sliders = {}
+
+        # Scenario 3: Both CLI and BBL are available
+        if has_cli and has_bbl:
+            QMessageBox.information(self, "Tuning Mode", "Using both CLI and Blackbox data for tuning.")
+            self.proposed_pids, sliders = tune_from_cli_and_blackbox(
+                self.current_pids, self.loaded_logs[self.bb_log_path], drone_profile, axis_to_tune
+            )
+
+        # Scenario 2: Only CLI is available
+        elif has_cli:
+            QMessageBox.information(self, "Tuning Mode", "Using CLI data for tuning.")
+            self.proposed_pids, sliders = tune_with_sliders(self.current_pids, drone_profile, axis_to_tune)
+
+        # Scenario 1: Only BBL is available
+        elif has_bbl:
+            QMessageBox.information(self, "Tuning Mode", "Using Blackbox data for tuning.")
+            self.proposed_pids, sliders = tune_from_blackbox(
+                self.loaded_logs[self.bb_log_path], drone_profile, axis_to_tune
+            )
+
 
         self.setCursor(Qt.CursorShape.ArrowCursor)
 
-        self.update_ui_with_pids(self.proposed_pids, target='proposed')
-        self.update_slider_display(sliders)
-
-        self.run_simulations_and_update_cli()
-        self.update_simulation_button.setEnabled(True)
+        if self.proposed_pids:
+            self.update_ui_with_pids(self.proposed_pids, target='proposed')
+            self.update_slider_display(sliders)
+            self.run_simulations_and_update_cli()
+            self.update_simulation_button.setEnabled(True)
+        else:
+            QMessageBox.warning(self, "Proposal Failed", "Could not generate a PID proposal with the available data.")
 
     def update_slider_display(self, sliders):
         self.slider_master.setText(f"{sliders.get('master', 1.0):.2f}")
@@ -367,9 +429,13 @@ class TuningTab(QWidget):
         self.run_simulations_and_update_cli(disturbance_magnitude=20.0, disturbance_time=0.1)
 
     def run_simulations_and_update_cli(self, is_initial_run=False, disturbance_magnitude=0.0, disturbance_time=0.0):
-        if not self.current_pids: return
-        self.plot_widget.clear()
+        has_cli = bool(self.dump_filepath)
+        has_bbl = bool(self.bb_log_path and self.bb_log_path in self.loaded_logs)
 
+        if not has_cli and not has_bbl:
+            return # Nothing to simulate
+
+        self.plot_widget.clear()
         profile_name = self.profile_combo.currentText()
         drone_profile = DRONE_PROFILES.get(profile_name, DRONE_PROFILES["Default"])
         axis_to_simulate = self.axis_combo.currentText().lower()
@@ -377,18 +443,33 @@ class TuningTab(QWidget):
         duration = self.duration_spinbox.value()
         inertia = drone_profile.get("inertia", 0.005)
 
-        sim_before = simulate_step_response(self.current_pids, axis_to_simulate, inertia, duration=duration, noise_level=noise_level, disturbance_magnitude=disturbance_magnitude, disturbance_time=disturbance_time)
-        if sim_before and sim_before.get("time") is not None:
-            smoothing_level = self.smoothing_slider.value()
-            response_smoothed = apply_smoothing(sim_before["response"], smoothing_level)
-            self.plot_widget.plot(sim_before["time"], response_smoothed, pen='r', name='Current Response')
-            metrics = calculate_response_metrics(sim_before["time"], sim_before["response"])
-            self._update_metrics_display(metrics, is_current=True)
-            self._update_classification_display(metrics, is_current=True)
+        # Plot real BBL response if available
+        if has_bbl:
+            log_data = self.loaded_logs[self.bb_log_path]
+            real_time, real_response = extract_step_response_from_log(log_data, axis_to_simulate)
+            if real_time is not None and real_response is not None:
+                self.plot_widget.plot(real_time, real_response, pen='b', name='Real Response (from BBL)')
+
+        # Simulate "Current" PIDs if a CLI dump is loaded
+        if has_cli:
+            sim_before = simulate_step_response(self.current_pids, axis_to_simulate, inertia, duration=duration, noise_level=noise_level, disturbance_magnitude=disturbance_magnitude, disturbance_time=disturbance_time)
+            if sim_before and sim_before.get("time") is not None:
+                smoothing_level = self.smoothing_slider.value()
+                response_smoothed = apply_smoothing(sim_before["response"], smoothing_level)
+                self.plot_widget.plot(sim_before["time"], response_smoothed, pen='r', name='Current Response (Simulated)')
+                metrics = calculate_response_metrics(sim_before["time"], sim_before["response"])
+                self._update_metrics_display(metrics, is_current=True)
+                self._update_classification_display(metrics, is_current=True)
 
         if is_initial_run: return
 
-        self.proposed_pids = self.current_pids.copy()
+        # Fallback to current PIDs if no proposal has been made yet
+        if not self.proposed_pids and self.current_pids:
+            self.proposed_pids = self.current_pids.copy()
+        elif not self.proposed_pids:
+            self.proposed_pids = {} # Ensure it's a dict
+
+        # Update proposed PIDs from the UI
         for axis in ["roll", "pitch", "yaw"]:
             for term in ["p", "i", "d"]:
                 self.proposed_pids[f"{term}_{axis}"] = self.pid_widgets[f"proposed_{term}_{axis}"].value()
@@ -440,4 +521,18 @@ class TuningTab(QWidget):
         label.setStyleSheet(f"color: {color}; font-weight: bold;")
 
     def set_data(self, logs):
-        pass
+        self.loaded_logs = logs
+        self.bb_log_combo.clear()
+
+        if logs:
+            self.bb_log_combo.addItem("Select a loaded BBL...", userData=None)
+            for path, data in logs.items():
+                self.bb_log_combo.addItem(os.path.basename(path), userData=path)
+
+            self.load_bb_button.setVisible(False)
+            self.bb_file_label.setVisible(False)
+            self.bb_log_combo.setVisible(True)
+        else:
+            self.load_bb_button.setVisible(True)
+            self.bb_file_label.setVisible(True)
+            self.bb_log_combo.setVisible(False)
