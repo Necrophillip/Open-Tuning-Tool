@@ -7,6 +7,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt
 import pyqtgraph as pg
+import numpy as np
 
 from fpv_tuner.analysis.tuning import (
     DRONE_PROFILES, calculate_response_metrics, classify_step_response,
