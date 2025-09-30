@@ -39,6 +39,7 @@ class TuningTab(QWidget):
         self._create_scope_controls(left_panel_layout)
         self._create_plot_settings_controls(left_panel_layout)
         self._create_proposal_display(left_panel_layout)
+        self._create_model_params_display(left_panel_layout)
         left_panel_layout.addStretch()
 
         scroll_area.setWidget(left_panel_container)
@@ -171,6 +172,38 @@ class TuningTab(QWidget):
 
         parent_layout.addWidget(group)
 
+    def _create_model_params_display(self, parent_layout):
+        group = QGroupBox("5. Model Parameters")
+        layout = QFormLayout(group)
+
+        self.model_param_labels = {
+            "k1": QLabel("N/A"), "tau": QLabel("N/A"),
+            "k2": QLabel("N/A"), "wn": QLabel("N/A"), "zeta": QLabel("N/A"),
+        }
+
+        layout.addRow("<b>1st Order (K, τ):</b>", self._create_param_row(self.model_param_labels["k1"], self.model_param_labels["tau"]))
+        layout.addRow("<b>2nd Order (K, ωn, ζ):</b>", self._create_param_row(self.model_param_labels["k2"], self.model_param_labels["wn"], self.model_param_labels["zeta"]))
+
+        parent_layout.addWidget(group)
+
+    def _create_param_row(self, *labels):
+        widget = QWidget()
+        layout = QHBoxLayout(widget)
+        for label in labels:
+            layout.addWidget(label)
+        layout.setContentsMargins(0,0,0,0)
+        return widget
+
+    def _update_model_params_display(self, analysis_results):
+        popt1 = analysis_results.get("popt1", [np.nan, np.nan])
+        popt2 = analysis_results.get("popt2", [np.nan, np.nan, np.nan])
+
+        self.model_param_labels["k1"].setText(f"{popt1[0]:.3f}")
+        self.model_param_labels["tau"].setText(f"{popt1[1]:.4f}")
+        self.model_param_labels["k2"].setText(f"{popt2[0]:.3f}")
+        self.model_param_labels["wn"].setText(f"{popt2[1]:.2f}")
+        self.model_param_labels["zeta"].setText(f"{popt2[2]:.3f}")
+
     def _connect_signals(self):
         self.load_dump_button.clicked.connect(self.on_load_dump)
         self.load_bb_button.clicked.connect(self.on_load_blackbox)
@@ -243,53 +276,35 @@ class TuningTab(QWidget):
         has_bbl = self.bb_log_path and self.bb_log_path in self.loaded_logs
         has_cli = self.dump_filepath and self.current_pids
 
-        # Scenario 1: Both Blackbox and CLI are available
-        if has_bbl and has_cli:
+        # Scenario 1: Blackbox data is available (priority)
+        if has_bbl:
             log_data = self.loaded_logs[self.bb_log_path]
+            analysis_results = extract_step_response_from_log(log_data.copy(), axis_to_analyze)
 
-            # Get real response from BBL
-            real_time, real_response = extract_step_response_from_log(log_data.copy(), axis_to_analyze, smooth_factor=self.smoothing_slider.value())
+            if analysis_results:
+                t, y, y1, p1, y2, p2 = (analysis_results.get(k) for k in ["t_avg", "y_avg", "y_fit1", "popt1", "y_fit2", "popt2"])
 
-            # Get simulated response from CLI PIDs for comparison or fallback
-            inertia = drone_profile.get("inertia", 0.005)
-            sim_time, sim_response = simulate_step_response(self.current_pids, axis_to_analyze, inertia)
+                self.plot_widget.plot(t, y, pen={'color': 'k', 'width': 2}, name='Avg. Real Response')
+                if not np.isnan(p1[0]):
+                    self.plot_widget.plot(t, y1, pen={'color': 'b', 'style': Qt.PenStyle.DashLine}, name='1st Order Fit')
+                if not np.isnan(p2[0]):
+                    self.plot_widget.plot(t, y2, pen={'color': 'r', 'style': Qt.PenStyle.DashLine}, name='2nd Order Fit')
 
-            if real_time is not None:
-                # BBL extraction successful, show both real and simulated plots
-                self.plot_widget.plot(real_time, real_response, pen='g', name='Real Response (BBL)')
-                if sim_time is not None:
-                    self.plot_widget.plot(sim_time, sim_response, pen='c', name='Simulated Response (CLI)')
-
-                metrics = calculate_response_metrics(real_time, real_response)
-                proposed_pids = propose_pids_from_bbl_and_cli(self.current_pids, log_data.copy(), drone_profile, axis_to_analyze)
+                metrics = calculate_response_metrics(t, y)
                 self._update_metrics_display(metrics)
                 self._update_classification_display(metrics)
-                self._update_proposal_display(proposed_pids)
-            elif sim_time is not None:
-                # BBL extraction failed, but we have a CLI, so fall back to simulated view
-                self.plot_widget.plot(sim_time, sim_response, pen='c', name='Simulated Response (CLI)')
-                metrics = calculate_response_metrics(sim_time, sim_response)
-                proposed_pids = propose_pids_from_simulation(self.current_pids, drone_profile)
-                self._update_metrics_display(metrics)
-                self._update_classification_display(metrics)
-                self._update_proposal_display(proposed_pids)
-                self._show_plot_message("Could not extract BBL response. Showing simulation.", corner='topLeft')
-            else:
-                self._show_plot_message("Could not extract or simulate a response.")
+                self._update_model_params_display(analysis_results)
 
-        # Scenario 2: Only Blackbox data is available
-        elif has_bbl:
-            log_data = self.loaded_logs[self.bb_log_path]
-            real_time, real_response = extract_step_response_from_log(log_data.copy(), axis_to_analyze, smooth_factor=self.smoothing_slider.value())
-            if real_time is not None:
-                self.plot_widget.plot(real_time, real_response, pen='g', name='Real Step Response')
-                metrics = calculate_response_metrics(real_time, real_response)
-                proposed_pids = propose_pids_from_metrics(metrics, drone_profile)
-                self._update_metrics_display(metrics)
-                self._update_classification_display(metrics)
+                # Propose PIDs based on BBL analysis, using CLI as base if available
+                if has_cli:
+                    proposed_pids = propose_pids_from_bbl_and_cli(self.current_pids, log_data.copy(), drone_profile, axis_to_analyze)
+                else:
+                    proposed_pids = propose_pids_from_metrics(metrics, drone_profile)
                 self._update_proposal_display(proposed_pids)
+
             else:
                 self._show_plot_message("Could not extract step response from Blackbox log.")
+                self._update_model_params_display({}) # Clear params
 
         # Scenario 3: Only CLI data is available
         elif has_cli:
