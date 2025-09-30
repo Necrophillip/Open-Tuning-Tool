@@ -1,112 +1,12 @@
 import re
 import numpy as np
-from scipy.signal import lti, step
 from fpv_tuner.analysis.utils import apply_smoothing
-
-def parse_dump(file_path):
-    """
-    Parses a Betaflight dump file to extract a comprehensive set of tuning parameters
-    and the firmware version. It prioritizes settings under the active profile but
-    also reads global settings.
-    """
-
-    # Comprehensive list of parameters we want to extract
-    TARGET_KEYS = {
-        # PIDs and Feedforward
-        'p_roll', 'i_roll', 'd_roll', 'f_roll',
-        'p_pitch', 'i_pitch', 'd_pitch', 'f_pitch',
-        'p_yaw', 'i_yaw', 'd_yaw', 'f_yaw',
-        # Gyro Filters
-        'gyro_lpf1_type', 'gyro_lpf1_static_hz', 'gyro_lpf1_dyn_min_hz', 'gyro_lpf1_dyn_max_hz',
-        'gyro_lpf2_type', 'gyro_lpf2_static_hz',
-        'gyro_notch1_hz', 'gyro_notch1_cutoff',
-        'gyro_notch2_hz', 'gyro_notch2_cutoff',
-        # D-Term Filters
-        'dterm_lpf1_type', 'dterm_lpf1_static_hz', 'dterm_lpf1_dyn_min_hz', 'dterm_lpf1_dyn_max_hz',
-        'dterm_lpf2_type', 'dterm_lpf2_static_hz',
-        'dterm_notch_hz', 'dterm_notch_cutoff',
-        # RC Smoothing
-        'rc_smoothing_setpoint_cutoff', 'rc_smoothing_feedforward_cutoff', 'rc_smoothing_throttle_cutoff'
-    }
-
-    settings = {}
-    firmware_version = None
-    active_profile_id = -1
-    profile_settings = {}
-    global_settings = {}
-
-    try:
-        with open(file_path, 'r') as f:
-            lines = f.readlines()
-
-        # Find the active profile ID and firmware version first
-        for line in lines:
-            stripped_line = line.strip()
-            if stripped_line.startswith('# Betaflight /'):
-                firmware_version = stripped_line.strip('# ').strip()
-            if stripped_line.startswith('profile '):
-                active_profile_id = int(stripped_line.split(' ')[1])
-
-        if active_profile_id == -1: active_profile_id = 0
-
-        # Parse the entire file for settings
-        in_profile_block = False
-        current_profile_id = -1
-        for line in lines:
-            stripped_line = line.strip()
-
-            if stripped_line.startswith('# profile '):
-                in_profile_block = True
-                current_profile_id = int(stripped_line.split(' ')[2])
-                continue
-
-            if in_profile_block and (stripped_line.startswith('#') or not stripped_line):
-                in_profile_block = False
-                current_profile_id = -1
-                continue
-
-            match = re.match(r'set\s+([\w_]+)\s+=\s+([\w\d.-]+)', stripped_line)
-            if not match:
-                continue
-
-            key, value = match.group(1), match.group(2)
-
-            if key not in TARGET_KEYS:
-                continue
-
-            try:
-                if '.' in value:
-                    value = float(value)
-                else:
-                    value = int(value)
-            except ValueError:
-                pass
-
-            if in_profile_block and current_profile_id == active_profile_id:
-                profile_settings[key] = value
-            else:
-                global_settings[key] = value
-
-        settings = global_settings.copy()
-        settings.update(profile_settings)
-
-    except FileNotFoundError:
-        return None, None, f"Dump file not found at '{file_path}'"
-    except Exception as e:
-        return None, None, f"An error occurred while parsing: {e}"
-
-    if not settings:
-        return None, firmware_version, "Could not find any relevant tuning settings in the dump file."
-
-    return settings, firmware_version, None
-
 
 # A framework for storing drone characteristics. This allows the tuner to adapt
 # its behavior based on the type of quadcopter being tuned.
 DRONE_PROFILES = {
     "Default": {
         "inertia": 0.005,
-        "fitness_weights": {"overshoot": 2.0, "settling": 1.0, "rise_time": 0.5, "oscillation": 1.5},
         "safe_ranges": {
             'p_roll': (20, 150), 'i_roll': (20, 150), 'd_roll': (10, 100),
             'p_pitch': (20, 150), 'i_pitch': (20, 150), 'd_pitch': (10, 100),
@@ -115,7 +15,6 @@ DRONE_PROFILES = {
     },
     "5-inch Freestyle": {
         "inertia": 0.005,
-        "fitness_weights": {"overshoot": 1.5, "settling": 1.0, "rise_time": 1.0, "oscillation": 1.0},
         "safe_ranges": {
             'p_roll': (40, 120), 'i_roll': (50, 130), 'd_roll': (30, 80),
             'p_pitch': (40, 130), 'i_pitch': (50, 140), 'd_pitch': (35, 90),
@@ -124,7 +23,6 @@ DRONE_PROFILES = {
     },
     "Tinywhoop (1S)": {
         "inertia": 0.0008,
-        "fitness_weights": {"overshoot": 2.5, "settling": 1.5, "rise_time": 0.5, "oscillation": 2.0},
         "safe_ranges": {
             'p_roll': (20, 80), 'i_roll': (30, 90), 'd_roll': (20, 70),
             'p_pitch': (20, 85), 'i_pitch': (30, 95), 'd_pitch': (20, 75),
@@ -133,7 +31,6 @@ DRONE_PROFILES = {
     },
      "Cinelifter": {
         "inertia": 0.015,
-        "fitness_weights": {"overshoot": 3.0, "settling": 2.0, "rise_time": 0.2, "oscillation": 2.5},
         "safe_ranges": {
             'p_roll': (50, 150), 'i_roll': (60, 160), 'd_roll': (40, 100),
             'p_pitch': (50, 160), 'i_pitch': (60, 170), 'd_pitch': (45, 110),
@@ -142,616 +39,210 @@ DRONE_PROFILES = {
     }
 }
 
+def parse_dump(file_path):
+    settings = {}
+    try:
+        with open(file_path, 'r') as f:
+            for line in f:
+                match = re.match(r'set\s+([\w_]+)\s+=\s+([\w\d.-]+)', line.strip())
+                if match:
+                    key, value = match.group(1), match.group(2)
+                    try:
+                        value = int(value) if '.' not in value else float(value)
+                    except ValueError:
+                        pass
+                    settings[key] = value
+    except FileNotFoundError:
+        return None, None, f"Dump file not found: {file_path}"
+    except Exception as e:
+        return None, None, f"Error parsing dump: {e}"
 
-def validate_settings(proposed_pids, original_pids, drone_profile):
-    """
-    Validates proposed PIDs against relative and absolute safe ranges.
-    Returns a list of warning strings.
-    """
-    warnings = []
+    if not any(k.startswith('p_') for k in settings):
+        return settings, None, "No PID settings found in dump."
+
+    return settings, None, None
+
+def propose_pids_from_simulation(base_pids, drone_profile):
+    # Simplified version of the old slider logic
+    pids = base_pids.copy()
+    # A simple heuristic: slightly increase P and D for a more aggressive tune
+    p_multiplier = 1.1
+    d_multiplier = 1.1
     safe_ranges = drone_profile.get("safe_ranges", {})
 
-    # Relative (multiplier) checks
-    for key in proposed_pids:
-        if key in original_pids and isinstance(original_pids[key], (int, float)) and original_pids[key] > 0 and key.startswith(('p_', 'i_', 'd_')):
-            # Ensure the proposed value is also a number before dividing
-            if not isinstance(proposed_pids[key], (int, float)):
-                continue
+    for axis in ['roll', 'pitch', 'yaw']:
+        p_key, d_key = f'p_{axis}', f'd_{axis}'
+        if p_key in pids:
+            pids[p_key] = int(pids[p_key] * p_multiplier)
+        if d_key in pids:
+            pids[d_key] = int(pids[d_key] * d_multiplier)
 
-            ratio = proposed_pids[key] / original_pids[key]
-            if not (0.5 <= ratio <= 1.7):
-                warnings.append(
-                    f"'{key}' ({proposed_pids[key]}) is {ratio:.2f}x the original value. "
-                    f"(Recommended range: 0.5x - 1.7x)"
-                )
-
-    # Absolute (hard limit) checks
+    # Clamp to safe ranges
     for key, (min_val, max_val) in safe_ranges.items():
-        if key in proposed_pids:
-            value = proposed_pids[key]
-            if not isinstance(value, (int, float)):
-                continue
-            if not min_val <= value <= max_val:
-                warnings.append(
-                    f"'{key}' ({value}) is outside the profile's absolute "
-                    f"safe range of ({min_val} - {max_val})."
-                )
-    return warnings
-
-
-def propose_tune(pids, reduction_percent=15):
-    """
-    DEPRECATED: This is a simple proposal method. Use find_optimal_tune for a better approach.
-    Proposes new PID settings based on a percentage reduction for D-gains.
-    Returns a dictionary with the proposed new values.
-    """
-    new_pids = pids.copy()
-    if 'd_roll' in pids:
-        new_pids['d_roll'] = int(pids['d_roll'] * (1 - reduction_percent / 100))
-    if 'd_pitch' in pids:
-        new_pids['d_pitch'] = int(pids['d_pitch'] * (1 - reduction_percent / 100))
-    return new_pids
-
-
-def _calculate_fitness(metrics, weights):
-    """
-    Calculates a fitness score from a metrics dictionary. Lower is better.
-    """
-    if not metrics:
-        return float('inf')
-
-    # Penalize heavily for instability (NaN values or extreme overshoot)
-    if np.isnan(metrics.get("Settling Time (s)", 0)) or metrics.get("Overshoot (%)", 100) > 100:
-        return float('inf')
-
-    score = (
-        metrics.get("Overshoot (%)", 50) * weights.get("overshoot", 1.0) +
-        metrics.get("Settling Time (s)", 1) * 100 * weights.get("settling", 1.0) +
-        metrics.get("Rise Time (s)", 1) * 100 * weights.get("rise_time", 1.0) +
-        metrics.get("Oscillation", 100) * weights.get("oscillation", 1.0)
-    )
-    return score
-
-
-def _compute_pids_from_sliders(base_pids, sliders):
-    """Applies slider multipliers to a set of base PID values."""
-    pids = base_pids.copy()
-    m = sliders.get("master", 1.0)
-    t = sliders.get("tracking", 1.0)
-    drift = sliders.get("drift", 1.0)
-    damp = sliders.get("damp", 1.0)
-    ff = sliders.get("ff", 1.0)
-
-    for axis in ["roll", "pitch", "yaw"]:
-        pids[f'p_{axis}'] = int(m * t * base_pids.get(f'p_{axis}', 0))
-        pids[f'i_{axis}'] = int(m * t * drift * base_pids.get(f'i_{axis}', 0))
-        pids[f'd_{axis}'] = int(m * damp * base_pids.get(f'd_{axis}', 0))
-        pids[f'f_{axis}'] = int(m * ff * base_pids.get(f'f_{axis}', 0))
+        if key in pids:
+            pids[key] = np.clip(pids[key], min_val, max_val)
 
     return pids
 
-def tune_with_sliders(base_pids, drone_profile, axis_to_tune, iterations=50):
+def propose_pids_from_bbl_and_cli(current_pids, log_df, drone_profile, axis):
     """
-    Uses a heuristic-based iterative approach to find a good set of sliders.
-    """
-    sliders = {"master": 1.0, "tracking": 1.0, "drift": 1.0, "damp": 1.0, "ff": 1.0}
-
-    # Get parameters from the selected drone profile
-    inertia = drone_profile.get("inertia", 0.005)
-
-    # Define target metrics (can be moved to profile later)
-    target_metrics = {"Overshoot (%)": 5, "Rise Time (s)": 0.05}
-
-    # Small increments for slider adjustments
-    STEP = 0.02
-
-    for i in range(iterations):
-        current_pids = _compute_pids_from_sliders(base_pids, sliders)
-
-        # Validate the new PIDs
-        warnings = validate_settings(current_pids, base_pids, drone_profile)
-        if warnings:
-            print(f"Iteration {i}: Unsafe PIDs generated, stopping.")
-            break # Stop if we've gone into an unsafe region
-
-        sim_results = simulate_step_response(current_pids, axis=axis_to_tune, inertia=inertia, noise_level=0.05)
-        if not sim_results:
-            continue
-
-        metrics = calculate_response_metrics(sim_results["time"], sim_results["response"])
-        if not metrics or np.isnan(metrics.get("Overshoot (%)", 0)):
-            continue
-
-        # Heuristic adjustment logic based on user's pseudocode
-        overshoot = metrics.get("Overshoot (%)", 0)
-        rise_time = metrics.get("Rise Time (s)", 1.0)
-
-        # This is a simplified heuristic model. A real implementation would be more complex.
-        if overshoot > target_metrics["Overshoot (%)"] * 1.2: # more than 20% over target
-            sliders["damp"] += STEP
-            sliders["tracking"] -= STEP * 0.5 # Reduce P/I slightly to help with overshoot
-        elif overshoot < target_metrics["Overshoot (%)"] * 0.8: # too sluggish
-             sliders["damp"] -= STEP
-
-        if rise_time > target_metrics["Rise Time (s)"] * 1.2:
-            sliders["master"] += STEP
-        elif rise_time < target_metrics["Rise Time (s)"] * 0.8:
-            sliders["master"] -= STEP * 0.5
-
-        # Clamp sliders to a reasonable range to prevent runaway
-        for key in sliders:
-            sliders[key] = np.clip(sliders[key], 0.5, 2.0)
-
-    final_pids = _compute_pids_from_sliders(base_pids, sliders)
-    return final_pids, sliders
-
-
-def find_optimal_tune(initial_pids, drone_profile, axis_to_tune, mode='RP', iterations=50):
-    """
-    DEPRECATED: This function directly modifies PID values. The new approach is tune_with_sliders.
-    Uses a simple hill-climbing algorithm to find a better PID tune.
-    """
-    best_pids = initial_pids.copy()
-
-    # Get parameters from the selected drone profile
-    inertia = drone_profile.get("inertia", 0.005)
-    fitness_weights = drone_profile.get("fitness_weights", {})
-
-    # Run a baseline simulation to get the initial fitness score
-    sim_results = simulate_step_response(best_pids, axis=axis_to_tune, inertia=inertia, noise_level=0.05)
-    if not sim_results:
-        return initial_pids # Cannot simulate, return original
-
-    metrics = calculate_response_metrics(sim_results["time"], sim_results["response"])
-    best_fitness = _calculate_fitness(metrics, fitness_weights)
-
-    # Determine which parameters to tweak based on the mode
-    if mode == 'RPY':
-        params_to_tweak = ['p_roll', 'd_roll', 'p_pitch', 'd_pitch', 'p_yaw', 'd_yaw']
-    else: # Default to 'RP'
-        params_to_tweak = ['p_roll', 'd_roll', 'p_pitch', 'd_pitch']
-
-    for _ in range(iterations):
-        candidate_pids = best_pids.copy()
-
-        param_to_tweak = np.random.choice(params_to_tweak)
-        adjustment = np.random.randint(-3, 4) # Adjust by a value between -3 and +3
-
-        candidate_pids[param_to_tweak] += adjustment
-
-        # Validate the new candidate against the profile's safe ranges
-        warnings = validate_settings(candidate_pids, drone_profile)
-        if warnings:
-            continue
-
-        # Simulate and calculate fitness for the candidate
-        sim_results = simulate_step_response(candidate_pids, axis=axis_to_tune, inertia=inertia, noise_level=0.05)
-        if not sim_results:
-            continue
-
-        metrics = calculate_response_metrics(sim_results["time"], sim_results["response"])
-        candidate_fitness = _calculate_fitness(metrics, fitness_weights)
-
-        # If the candidate is better, it becomes the new best
-        if candidate_fitness < best_fitness:
-            best_fitness = candidate_fitness
-            best_pids = candidate_pids
-
-    return best_pids
-
-
-def generate_cli(pids):
-    """
-    Generates Betaflight CLI commands to set the given PID values.
-    """
-    cli_commands = "# Paste the following commands into the Betaflight CLI:\n"
-    # Assuming we are targeting the active profile, no need for `profile X` command
-
-    if 'p_roll' in pids: cli_commands += f"set p_roll = {pids['p_roll']}\n"
-    if 'i_roll' in pids: cli_commands += f"set i_roll = {pids['i_roll']}\n"
-    if 'd_roll' in pids: cli_commands += f"set d_roll = {pids['d_roll']}\n"
-    if 'f_roll' in pids: cli_commands += f"set f_roll = {pids['f_roll']}\n"
-
-    if 'p_pitch' in pids: cli_commands += f"\nset p_pitch = {pids['p_pitch']}\n"
-    if 'i_pitch' in pids: cli_commands += f"set i_pitch = {pids['i_pitch']}\n"
-    if 'd_pitch' in pids: cli_commands += f"set d_pitch = {pids['d_pitch']}\n"
-    if 'f_pitch' in pids: cli_commands += f"set f_pitch = {pids['f_pitch']}\n"
-
-    cli_commands += "\nsave\n"
-    return cli_commands
-
-
-def simulate_step_response(pids, axis, inertia=0.005, duration=1.0, time_steps=1000, noise_level=0.0,
-                         disturbance_magnitude=0.0, disturbance_time=0.0):
-    """
-    Simulates the step response of a PID controller using a discrete-time loop.
-    This allows for the injection of noise and other non-linearities.
-
-    Args:
-        pids (dict): A dictionary containing keys like 'p_roll', 'd_roll'.
-        axis (str): The axis to simulate ('roll', 'pitch', 'yaw').
-        inertia (float): An arbitrary inertia value for the system model.
-        duration (float): The duration of the simulation in seconds.
-        time_steps (int): The number of time steps in the simulation.
-        noise_level (float): The standard deviation of the Gaussian noise to add to the gyro.
-        disturbance_magnitude (float): The magnitude of the disturbance force.
-        disturbance_time (float): The time at which to apply the disturbance.
-
-    Returns:
-        A tuple (time, response, d_term_trace) or (None, None, None) if PIDs are missing.
-    """
-    P_SCALE = 0.01
-    I_SCALE = 0.005
-    D_SCALE = 0.0001
-
-    try:
-        Kp = pids.get(f'p_{axis}', 0) * P_SCALE
-        Ki = pids.get(f'i_{axis}', 0) * I_SCALE
-        Kd = pids.get(f'd_{axis}', 0) * D_SCALE
-    except (KeyError, TypeError):
-         return None, None, None
-
-    # Simulation parameters
-    dt = duration / time_steps
-    t = np.linspace(0, duration, time_steps)
-    setpoint = 1.0  # Step input
-
-    # System state variables
-    position = 0.0
-    velocity = 0.0
-
-    # PID state variables
-    integral = 0.0
-    previous_error = 0.0
-
-    # Filter state variables
-    d_term_filtered = 0.0
-
-    # Calculate PT1 filter alpha if applicable
-    d_lpf_hz = pids.get('dterm_lpf1_static_hz', 0)
-    if d_lpf_hz > 0:
-        rc = 1 / (2 * np.pi * d_lpf_hz)
-        d_lpf_alpha = dt / (dt + rc)
-    else:
-        d_lpf_alpha = 1.0 # No filtering
-
-    # Output arrays
-    response = np.zeros(time_steps)
-    p_trace = np.zeros(time_steps)
-    i_trace = np.zeros(time_steps)
-    d_trace = np.zeros(time_steps)
-
-    for i in range(time_steps):
-        # Add noise to the measurement of the position (simulating noisy gyro)
-        measured_position = position + np.random.normal(0, noise_level)
-
-        # PID Calculation
-        error = setpoint - measured_position
-        integral += error * dt
-
-        # Raw derivative
-        derivative = (error - previous_error) / dt
-
-        # Apply PT1 low-pass filter to the derivative
-        d_term_filtered += d_lpf_alpha * (derivative - d_term_filtered)
-
-        p_term = Kp * error
-        i_term = Ki * integral
-        d_term = Kd * d_term_filtered # Use the filtered value
-
-        controller_output = p_term + i_term + d_term
-
-        # Update system dynamics (plant)
-        acceleration = controller_output / inertia
-
-        # Apply disturbance if applicable
-        if disturbance_magnitude > 0 and disturbance_time > 0 and \
-           disturbance_time <= t[i] < disturbance_time + dt:
-            acceleration += disturbance_magnitude / inertia
-
-        velocity += acceleration * dt
-        position += velocity * dt
-
-        # Store results
-        response[i] = position
-        p_trace[i] = p_term
-        i_trace[i] = i_term
-        d_trace[i] = d_term
-
-        # Update state for next iteration
-        previous_error = error
-
-    # Return a dictionary for clarity
-    return {
-        "time": t, "response": response, "p_trace": p_trace,
-        "i_trace": i_trace, "d_trace": d_trace
-    }
-
-
-def calculate_response_metrics(time, response, setpoint=1.0):
-    """
-    Calculates key performance metrics from a step response trace.
-    """
-    if response is None or len(response) == 0:
-        return {}
-
-    # Final value is the mean of the last 10% of the response
-    final_value_start_index = int(len(response) * 0.9)
-    final_value = np.mean(response[final_value_start_index:])
-
-    # Overshoot
-    peak_value = np.max(response)
-    overshoot = ((peak_value - final_value) / final_value) * 100 if final_value != 0 else 0
-
-    # Rise Time (10% to 90% of the final value)
-    try:
-        ten_percent_val = 0.1 * final_value
-        ninety_percent_val = 0.9 * final_value
-
-        time_at_10 = time[np.where(response >= ten_percent_val)[0][0]]
-        time_at_90 = time[np.where(response >= ninety_percent_val)[0][0]]
-        rise_time = time_at_90 - time_at_10
-    except IndexError:
-        rise_time = np.nan # Not enough data or response didn't cross thresholds
-
-    # Settling Time (time to settle within ±2% of the final value)
-    try:
-        settling_threshold = 0.02 * final_value
-        # Find indices where the response is outside the ±2% band
-        unsettled_indices = np.where(np.abs(response - final_value) > settling_threshold)[0]
-
-        if len(unsettled_indices) == 0:
-            # If it's always settled, find when it first entered the band
-            settled_indices = np.where(np.abs(response - final_value) <= settling_threshold)[0]
-            first_settled_index = settled_indices[0] if len(settled_indices) > 0 else 0
-            settling_time = time[first_settled_index]
-        else:
-            # The last time it was outside the band
-            last_unsettled_index = unsettled_indices[-1]
-            settling_time = time[last_unsettled_index]
-    except IndexError:
-        settling_time = np.nan
-
-    # Oscillation (sum of absolute error after settling time)
-    oscillation = 0
-    if not np.isnan(settling_time):
-        try:
-            settling_index = np.where(time >= settling_time)[0][0]
-            oscillation = np.sum(np.abs(response[settling_index:] - final_value))
-        except IndexError:
-            oscillation = np.nan
-
-    return {
-        "Overshoot (%)": overshoot,
-        "Rise Time (s)": rise_time,
-        "Settling Time (s)": settling_time,
-        "Oscillation": oscillation
-    }
-
-
-def classify_step_response(metrics):
-    """
-    Analyzes response metrics to classify the system's behavior.
-    Returns a text description and a color hint.
-    """
-    if not metrics or any(np.isnan(v) for v in metrics.values()):
-        return "Unstable or Incomplete", "red"
-
-    overshoot = metrics.get("Overshoot (%)", 0)
-    oscillation = metrics.get("Oscillation", 0)
-    rise_time = metrics.get("Rise Time (s)", 1.0)
-
-    if overshoot > 15 or oscillation > 10:
-        return "Oscillatory / High Overshoot", "red"
-    elif overshoot > 5:
-        return "Underdamped (noticeable overshoot)", "orange"
-    elif overshoot >= 0:
-        if rise_time < 0.08:
-             return "Critically Damped (Optimal)", "green"
-        else:
-             return "Slightly Overdamped (Slow)", "yellow"
-    else: # Overshoot is negative
-        return "Overdamped (Very Sluggish)", "blue"
-
-
-def tune_from_cli_and_blackbox(current_pids, log_df, drone_profile, axis_to_tune):
-    """
-    Generates a PID proposal by comparing the real step response from a Blackbox
-    log to the simulated response from the current CLI PIDs, and adjusting sliders
-    to compensate for the difference.
+    Proposes PIDs by comparing real BBL response to simulated CLI response.
     """
     # 1. Get real response from BBL
-    real_time, real_response = extract_step_response_from_log(log_df, axis_to_tune)
-    if real_time is None:
-        return {}, {} # Cannot proceed
+    real_time, real_response = extract_step_response_from_log(log_df, axis)
+    if real_time is None: return current_pids # Fallback to current if no BBL data
     real_metrics = calculate_response_metrics(real_time, real_response)
 
     # 2. Get simulated response from current PIDs
     inertia = drone_profile.get("inertia", 0.005)
-    sim_results = simulate_step_response(current_pids, axis=axis_to_tune, inertia=inertia)
-    if not sim_results:
-        return {}, {}
-    sim_metrics = calculate_response_metrics(sim_results["time"], sim_results["response"])
+    sim_time, sim_response = simulate_step_response(current_pids, axis, inertia)
+    if sim_time is None: return current_pids # Fallback
+    sim_metrics = calculate_response_metrics(sim_time, sim_response)
 
-    if not real_metrics or not sim_metrics:
-        return {}, {}
+    if not real_metrics or not sim_metrics or any(np.isnan(v) for v in real_metrics.values()) or any(np.isnan(v) for v in sim_metrics.values()):
+        return current_pids # Fallback if metrics are bad
 
-    # 3. Compare metrics and adjust sliders
-    sliders = {"master": 1.0, "tracking": 1.0, "drift": 1.0, "damp": 1.0, "ff": 1.0}
-
+    # 3. Compare metrics and adjust PIDs
     overshoot_error = real_metrics.get("Overshoot (%)", 0) - sim_metrics.get("Overshoot (%)", 0)
     rise_time_error = real_metrics.get("Rise Time (s)", 1) - sim_metrics.get("Rise Time (s)", 1)
 
-    # Heuristics to adjust sliders based on the deviation
-    if overshoot_error > 5: # Real response overshoots more than simulation
-        sliders['damp'] += 0.15
-        sliders['tracking'] -= 0.05
-    elif overshoot_error < -5: # Real response is more damped than simulation
-        sliders['damp'] -= 0.15
+    proposed_pids = current_pids.copy()
+    p_key, d_key = f'p_{axis}', f'd_{axis}'
 
-    if rise_time_error > 0.02: # Real response is slower than simulation
-        sliders['master'] += 0.1
-        sliders['tracking'] += 0.05
-    elif rise_time_error < -0.02: # Real response is faster than simulation
-        sliders['master'] -= 0.1
+    # Heuristics
+    if overshoot_error > 5: # Real is more oscillatory
+        proposed_pids[d_key] = int(proposed_pids.get(d_key, 40) * 1.1) # Increase D
+    elif overshoot_error < -5: # Real is more damped
+        proposed_pids[d_key] = int(proposed_pids.get(d_key, 40) * 0.9) # Decrease D
 
-    # Clamp sliders to a reasonable range
-    for key in sliders:
-        sliders[key] = np.clip(sliders[key], 0.6, 1.8)
+    if rise_time_error > 0.02: # Real is slower
+        proposed_pids[p_key] = int(proposed_pids.get(p_key, 40) * 1.1) # Increase P
+    elif rise_time_error < -0.02: # Real is faster
+        proposed_pids[p_key] = int(proposed_pids.get(p_key, 40) * 0.9) # Decrease P
 
-    # 4. Compute final PIDs using the original PIDs as a base
-    proposed_pids = _compute_pids_from_sliders(current_pids, sliders)
-
-    return proposed_pids, sliders
-
-
-def tune_from_blackbox(log_df, drone_profile, axis_to_tune):
-    """
-    Generates a PID proposal based solely on a Blackbox log's step response.
-    It uses the drone profile's safe ranges as a baseline.
-    """
-    time, response = extract_step_response_from_log(log_df, axis_to_tune)
-
-    if time is None or response is None:
-        return {}, {} # Cannot proceed
-
-    metrics = calculate_response_metrics(time, response)
-    if not metrics:
-        return {}, {}
-
-    # Start with default sliders
-    sliders = {"master": 1.0, "tracking": 1.0, "drift": 1.0, "damp": 1.0, "ff": 1.0}
-
-    # Adjust sliders based on real-world performance metrics
-    overshoot = metrics.get("Overshoot (%)", 0)
-    rise_time = metrics.get("Rise Time (s)", 1.0)
-
-    # Heuristics to adjust sliders based on BBL analysis
-    if overshoot > 15: # High overshoot
-        sliders['damp'] += 0.2
-        sliders['tracking'] -= 0.1
-    elif overshoot < 2: # Sluggish, no overshoot
-        sliders['damp'] -= 0.15
-
-    if rise_time > 0.1: # Slow response
-        sliders['master'] += 0.15
-        sliders['tracking'] += 0.1
-    elif rise_time < 0.04: # Very sharp response
-        sliders['master'] -= 0.1
-
-    # Clamp sliders to a reasonable range
-    for key in sliders:
-        sliders[key] = np.clip(sliders[key], 0.6, 1.8)
-
-    # Use the 'safe_ranges' from the profile to create a baseline PID set.
-    # We'll aim for the middle of the safe range.
-    base_pids = {}
+    # Clamp to safe ranges
     safe_ranges = drone_profile.get("safe_ranges", {})
     for key, (min_val, max_val) in safe_ranges.items():
-        base_pids[key] = (min_val + max_val) // 2
+        if key in proposed_pids:
+            proposed_pids[key] = int(np.clip(proposed_pids[key], min_val, max_val))
 
-    # Compute the final PIDs using the adjusted sliders and the baseline
-    proposed_pids = _compute_pids_from_sliders(base_pids, sliders)
+    return proposed_pids
 
-    return proposed_pids, sliders
+def simulate_step_response(pids, axis, inertia=0.005, duration=1.0, time_steps=1000):
+    P_SCALE, I_SCALE, D_SCALE = 0.01, 0.005, 0.0001
+    Kp = pids.get(f'p_{axis}', 0) * P_SCALE
+    Ki = pids.get(f'i_{axis}', 0) * I_SCALE
+    Kd = pids.get(f'd_{axis}', 0) * D_SCALE
 
+    dt = duration / time_steps
+    t = np.linspace(0, duration, time_steps)
+    setpoint, position, velocity, integral, prev_error = 1.0, 0.0, 0.0, 0.0, 0.0
+    response = np.zeros(time_steps)
 
-def extract_step_response_from_log(df, axis, step_threshold=0.8, duration_s=0.4, min_step_interval_s=0.5, smooth_factor=5):
-    """
-    Extracts and averages multiple step response sequences from a blackbox log.
+    for i in range(time_steps):
+        error = setpoint - position
+        integral += error * dt
+        derivative = (error - prev_error) / dt
+        output = Kp * error + Ki * integral + Kd * derivative
+        acceleration = output / inertia
+        velocity += acceleration * dt
+        position += velocity * dt
+        response[i] = position
+        prev_error = error
 
-    Args:
-        df (pd.DataFrame): The blackbox log DataFrame.
-        axis (str): 'roll', 'pitch', or 'yaw'.
-        step_threshold (float): Normalized change in rcCommand to detect a step.
-        duration_s (float): Duration of the response to capture.
-        min_step_interval_s (float): Minimum time between detected steps.
-        smooth_factor (int): Smoothing level for gyro data.
+    return t, response
 
-    Returns:
-        A tuple (time_array, averaged_response_array) or (None, None).
-    """
+def propose_pids_from_metrics(metrics, drone_profile):
+    if not metrics or any(np.isnan(v) for v in metrics.values()): return {}
+    overshoot, rise_time = metrics.get("Overshoot (%)", 0), metrics.get("Rise Time (s)", 1.0)
+    base_pids = {k: (v[0] + v[1]) // 2 for k, v in drone_profile.get("safe_ranges", {}).items()}
+    p_mult = 1.2 if rise_time > 0.1 else 0.8 if rise_time < 0.04 else 1.0
+    d_mult = 1.3 if overshoot > 15 else 0.8 if overshoot < 2 else 1.0
+    for axis in ['roll', 'pitch', 'yaw']:
+        if f'p_{axis}' in base_pids: base_pids[f'p_{axis}'] = int(base_pids[f'p_{axis}'] * p_mult)
+        if f'd_{axis}' in base_pids: base_pids[f'd_{axis}'] = int(base_pids[f'd_{axis}'] * d_mult)
+    return {k: np.clip(v, *drone_profile["safe_ranges"][k]) for k, v in base_pids.items() if k in drone_profile["safe_ranges"]}
+
+def generate_cli(pids):
+    if not pids: return "No PIDs proposed."
+    cli = "# Paste into Betaflight CLI:\n"
+    cli += "\n".join([f"set {k} = {v}" for k, v in pids.items() if k.startswith(('p_', 'i_', 'd_'))])
+    cli += "\nsave\n"
+    return cli
+
+def calculate_response_metrics(time, response, setpoint=1.0):
+    if response is None or len(response) < 2: return {}
+    final_val_idx = int(len(response) * 0.9)
+    final_val = np.mean(response[final_val_idx:])
+    peak_val = np.max(response)
+    overshoot = ((peak_val - final_val) / final_val) * 100 if final_val != 0 else 0
+    try:
+        t10 = time[np.where(response >= 0.1 * final_val)[0][0]]
+        t90 = time[np.where(response >= 0.9 * final_val)[0][0]]
+        rise_time = t90 - t10
+    except (IndexError, ZeroDivisionError): rise_time = np.nan
+    try:
+        settling_thresh = 0.02 * abs(final_val)
+        unsettled = np.where(np.abs(response - final_val) > settling_thresh)[0]
+        settling_time = time[unsettled[-1]] if len(unsettled) > 0 else time[np.where(np.abs(response-final_val) <= settling_thresh)[0][0]]
+    except (IndexError, ZeroDivisionError): settling_time = np.nan
+    oscillation = np.sum(np.abs(response[np.where(time >= settling_time)[0][0]:] - final_val)) if not np.isnan(settling_time) else np.nan
+    return {"Overshoot (%)": overshoot, "Rise Time (s)": rise_time, "Settling Time (s)": settling_time, "Oscillation": oscillation}
+
+def classify_step_response(metrics):
+    if not metrics or any(np.isnan(v) for v in metrics.values()): return "Unstable or Incomplete", "red"
+    overshoot, oscillation, rise_time = metrics.get("Overshoot (%)",0), metrics.get("Oscillation",0), metrics.get("Rise Time (s)",1.0)
+    if overshoot > 15 or oscillation > 10: return "Oscillatory / High Overshoot", "red"
+    if overshoot > 5: return "Underdamped (noticeable overshoot)", "orange"
+    if rise_time < 0.08: return "Critically Damped (Optimal)", "green"
+    return "Slightly Overdamped (Slow)", "yellow"
+
+def extract_step_response_from_log(df, axis, **kwargs):
     axis_map = {'roll': 0, 'pitch': 1, 'yaw': 2}
     if axis not in axis_map: return None, None
+    rc_col, gyro_col, time_col = f'rcCommand[{axis_map[axis]}]', f'gyroADC[{axis_map[axis]}]', 'time (us)'
+    if not all(c in df.columns for c in [rc_col, gyro_col, time_col]): return None, None
 
-    rc_col = f'rcCommand[{axis_map[axis]}]'
-    gyro_col = f'gyroADC[{axis_map[axis]}]'
-    time_col = 'time (us)'
-
-    if rc_col not in df.columns or gyro_col not in df.columns or time_col not in df.columns:
-        return None, None
-
-    # 1. Pre-filter gyro data
-    df[gyro_col] = apply_smoothing(df[gyro_col], smooth_factor)
-
-    # 2. Normalize RC command
+    df[gyro_col] = apply_smoothing(df[gyro_col], kwargs.get('smooth_factor', 5))
     rc_min, rc_max = df[rc_col].min(), df[rc_col].max()
     if rc_max == rc_min: return None, None
-    rc_normalized = 2 * (df[rc_col] - rc_min) / (rc_max - rc_min) - 1
+    rc_norm = 2 * (df[rc_col] - rc_min) / (rc_max - rc_min) - 1
 
-    # 3. Detect all step transitions
-    diff = rc_normalized.diff().abs()
-    candidate_indices = df.index[diff > step_threshold]
+    diff = rc_norm.diff().abs()
+    candidates = df.index[diff > kwargs.get('step_threshold', 0.8)]
+    if len(candidates) == 0: return None, None
 
-    if len(candidate_indices) == 0: return None, None
+    valid_indices, last_time = [], -np.inf
+    min_interval_us = kwargs.get('min_step_interval_s', 0.5) * 1_000_000
+    for idx in candidates:
+        if df.loc[idx, time_col] > last_time + min_interval_us:
+            valid_indices.append(idx)
+            last_time = df.loc[idx, time_col]
 
-    # Filter candidates to ensure they are spaced apart by at least min_step_interval
-    valid_step_indices = []
-    last_step_time_us = -np.inf
-    min_interval_us = min_step_interval_s * 1_000_000
+    if not valid_indices: return None, None
 
-    for index in candidate_indices:
-        current_time_us = df.loc[index, time_col]
-        if current_time_us > last_step_time_us + min_interval_us:
-            valid_step_indices.append(index)
-            last_step_time_us = current_time_us
+    all_responses, final_time_s = [], None
+    duration_s = kwargs.get('duration_s', 0.4)
+    for start_idx in valid_indices:
+        start_time = df.loc[start_idx, time_col]
+        end_time = start_time + (duration_s * 1_000_000)
+        win_df = df[(df[time_col] >= start_time) & (df[time_col] < end_time)]
+        if len(win_df) < 2: continue
 
-    if not valid_step_indices: return None, None
+        time_s = (win_df[time_col] - start_time) / 1_000_000
+        gyro_shifted = win_df[gyro_col] - win_df[gyro_col].iloc[0]
+        rc_win = rc_norm.loc[win_df.index]
+        step_mag = rc_win.iloc[-1] - rc_win.iloc[0]
+        if abs(step_mag) < 1e-6: continue
 
-    # 4. Extract and normalize each individual response
-    all_responses = []
-    final_time_s = None
-
-    for start_index in valid_step_indices:
-        start_time_us = df.loc[start_index, time_col]
-        end_time_us = start_time_us + (duration_s * 1_000_000)
-
-        # Define the window for this step
-        window_df = df[(df[time_col] >= start_time_us) & (df[time_col] < end_time_us)]
-        if len(window_df) < 2: continue
-
-        # Normalize time for this window
-        time_us = window_df[time_col] - start_time_us
-        time_s = time_us / 1_000_000
-
-        # Normalize gyro response
-        gyro_window = window_df[gyro_col]
-        initial_gyro_val = gyro_window.iloc[0]
-        gyro_shifted = gyro_window - initial_gyro_val
-
-        # Determine step magnitude from the RC command change
-        rc_window = rc_normalized.loc[window_df.index]
-        step_magnitude = rc_window.iloc[-1] - rc_window.iloc[0]
-
-        if abs(step_magnitude) < 1e-6: continue
-
-        response_normalized = gyro_shifted / step_magnitude
-
-        all_responses.append(response_normalized.values)
-        if final_time_s is None:
-             final_time_s = time_s.values
+        all_responses.append((gyro_shifted / step_mag).values)
+        if final_time_s is None: final_time_s = time_s.values
 
     if not all_responses: return None, None
 
-    # 5. Average the responses by taking the median
-    # Pad responses to the same length before stacking
     max_len = max(len(r) for r in all_responses)
-    padded_responses = [np.pad(r, (0, max_len - len(r)), 'edge') for r in all_responses]
+    padded = [np.pad(r, (0, max_len - len(r)), 'edge') for r in all_responses]
+    avg_resp = np.median(np.vstack(padded), axis=0)
 
-    response_stack = np.vstack(padded_responses)
-    averaged_response = np.median(response_stack, axis=0)
-
-    # Ensure time vector matches the length of the averaged response
-    final_time_s = final_time_s[:len(averaged_response)] if final_time_s is not None else np.linspace(0, duration_s, len(averaged_response))
-
-    return final_time_s, averaged_response
+    time_vec = final_time_s[:len(avg_resp)] if final_time_s is not None else np.linspace(0, duration_s, len(avg_resp))
+    return time_vec, avg_resp
