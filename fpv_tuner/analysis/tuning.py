@@ -332,7 +332,11 @@ def extract_step_response_from_log(df, axis):
         popt1, y_fit1 = [np.nan, np.nan], np.zeros_like(t_avg)
 
     try:
-        popt2, _ = curve_fit(second_order_step, t_avg, y_avg, p0=[np.mean(y_avg[-5:]), 200, 0.5], maxfev=5000, bounds=([0, 0, 0], [2, 1000, 1.5]))
+        # Clip the initial guess for K to be within the defined bounds [0, 2]
+        k_guess = np.clip(np.mean(y_avg[-5:]), 0.0, 2.0)
+        p0_2nd_order = [k_guess, 200, 0.5]
+
+        popt2, _ = curve_fit(second_order_step, t_avg, y_avg, p0=p0_2nd_order, maxfev=5000, bounds=([0, 0, 0], [2, 1000, 1.5]))
         y_fit2 = second_order_step(t_avg, *popt2)
     except RuntimeError:
         popt2, y_fit2 = [np.nan, np.nan, np.nan], np.zeros_like(t_avg)
