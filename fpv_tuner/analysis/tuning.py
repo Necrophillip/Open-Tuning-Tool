@@ -40,27 +40,70 @@ DRONE_PROFILES = {
 }
 
 def parse_dump(file_path):
+    """
+    Parses a Betaflight dump file to extract a comprehensive set of tuning parameters
+    and the firmware version. It prioritizes settings under the active profile but
+    also reads global settings.
+    """
+    TARGET_KEYS = {
+        'p_roll', 'i_roll', 'd_roll', 'f_roll', 'p_pitch', 'i_pitch', 'd_pitch', 'f_pitch',
+        'p_yaw', 'i_yaw', 'd_yaw', 'f_yaw',
+    }
     settings = {}
+    firmware_version = None
+    active_profile_id = -1
+    profile_settings = {}
+    global_settings = {}
+
     try:
         with open(file_path, 'r') as f:
-            for line in f:
-                match = re.match(r'set\s+([\w_]+)\s+=\s+([\w\d.-]+)', line.strip())
-                if match:
-                    key, value = match.group(1), match.group(2)
-                    try:
-                        value = int(value) if '.' not in value else float(value)
-                    except ValueError:
-                        pass
-                    settings[key] = value
+            lines = f.readlines()
+
+        for line in lines:
+            stripped_line = line.strip()
+            if stripped_line.startswith('# Betaflight /'):
+                firmware_version = stripped_line.strip('# ').strip()
+            if stripped_line.startswith('profile '):
+                active_profile_id = int(stripped_line.split(' ')[1])
+
+        if active_profile_id == -1: active_profile_id = 0
+
+        in_profile_block = False
+        current_profile_id = -1
+        for line in lines:
+            stripped_line = line.strip()
+            if stripped_line.startswith('# profile '):
+                in_profile_block = True
+                current_profile_id = int(stripped_line.split(' ')[2])
+                continue
+            if in_profile_block and (stripped_line.startswith('#') or not stripped_line):
+                in_profile_block = False
+                current_profile_id = -1
+                continue
+            match = re.match(r'set\s+([\w_]+)\s+=\s+([\w\d.-]+)', stripped_line)
+            if not match: continue
+            key, value = match.group(1), match.group(2)
+            if key not in TARGET_KEYS: continue
+            try:
+                value = float(value) if '.' in value else int(value)
+            except ValueError: pass
+            if in_profile_block and current_profile_id == active_profile_id:
+                profile_settings[key] = value
+            else:
+                global_settings[key] = value
+
+        settings = global_settings.copy()
+        settings.update(profile_settings)
+
     except FileNotFoundError:
-        return None, None, f"Dump file not found: {file_path}"
+        return None, None, f"Dump file not found at '{file_path}'"
     except Exception as e:
-        return None, None, f"Error parsing dump: {e}"
+        return None, None, f"An error occurred while parsing: {e}"
 
-    if not any(k.startswith('p_') for k in settings):
-        return settings, None, "No PID settings found in dump."
+    if not settings:
+        return None, firmware_version, "Could not find any relevant tuning settings in the dump file."
 
-    return settings, None, None
+    return settings, firmware_version, None
 
 def propose_pids_from_simulation(base_pids, drone_profile):
     # Simplified version of the old slider logic
@@ -209,11 +252,11 @@ def extract_step_response_from_log(df, axis, **kwargs):
     rc_norm = 2 * (df[rc_col] - rc_min) / (rc_max - rc_min) - 1
 
     diff = rc_norm.diff().abs()
-    candidates = df.index[diff > kwargs.get('step_threshold', 0.8)]
+    candidates = df.index[diff > kwargs.get('step_threshold', 0.6)] # Relaxed threshold
     if len(candidates) == 0: return None, None
 
     valid_indices, last_time = [], -np.inf
-    min_interval_us = kwargs.get('min_step_interval_s', 0.5) * 1_000_000
+    min_interval_us = kwargs.get('min_step_interval_s', 0.3) * 1_000_000 # Relaxed interval
     for idx in candidates:
         if df.loc[idx, time_col] > last_time + min_interval_us:
             valid_indices.append(idx)

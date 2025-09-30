@@ -15,7 +15,7 @@ from fpv_tuner.analysis.tuning import (
     propose_pids_from_bbl_and_cli
 )
 from fpv_tuner.analysis.blackbox_parser import get_blackbox_headers
-from fpv_tuner.blackbox.loader import _decode_blackbox_log
+from fpv_tuner.blackbox.loader import load_log
 from fpv_tuner.analysis.utils import apply_smoothing
 
 class TuningTab(QWidget):
@@ -221,21 +221,17 @@ class TuningTab(QWidget):
         filepath, _ = QFileDialog.getOpenFileName(self, "Open Blackbox Log", "", "Blackbox Logs (*.bbl *.bfl *.csv);;All Files (*)")
         if not filepath: return
 
-        # Since we are not a main-window loader, we need to decode here if necessary
-        # and store the result in our local `loaded_logs`.
         self.setCursor(Qt.CursorShape.WaitCursor)
-        from fpv_tuner.gui.worker import LogLoaderWorker # Local import to avoid circular deps
-        worker = LogLoaderWorker()
-        file_path, df, error = worker.process_single_file(filepath)
+        df, error = load_log(filepath)
         self.setCursor(Qt.CursorShape.ArrowCursor)
 
         if error:
             QMessageBox.critical(self, "Error Loading Log", error)
             return
 
-        self.loaded_logs[file_path] = df
-        self.bb_log_path = file_path
-        self.bb_file_label.setText(os.path.basename(file_path))
+        self.loaded_logs[filepath] = df
+        self.bb_log_path = filepath
+        self.bb_file_label.setText(os.path.basename(filepath))
         self.update_display_and_propose()
 
     def update_display_and_propose(self):
@@ -253,21 +249,33 @@ class TuningTab(QWidget):
 
             # Get real response from BBL
             real_time, real_response = extract_step_response_from_log(log_data.copy(), axis_to_analyze, smooth_factor=self.smoothing_slider.value())
-            if real_time is not None:
-                self.plot_widget.plot(real_time, real_response, pen='g', name='Real Response (BBL)')
-                metrics = calculate_response_metrics(real_time, real_response)
-                self._update_metrics_display(metrics)
-                self._update_classification_display(metrics)
 
-            # Get simulated response from CLI PIDs
+            # Get simulated response from CLI PIDs for comparison or fallback
             inertia = drone_profile.get("inertia", 0.005)
             sim_time, sim_response = simulate_step_response(self.current_pids, axis_to_analyze, inertia)
-            if sim_time is not None:
-                self.plot_widget.plot(sim_time, sim_response, pen='c', name='Simulated Response (CLI)')
 
-            # Propose tune based on both
-            proposed_pids = propose_pids_from_bbl_and_cli(self.current_pids, log_data.copy(), drone_profile, axis_to_analyze)
-            self._update_proposal_display(proposed_pids)
+            if real_time is not None:
+                # BBL extraction successful, show both real and simulated plots
+                self.plot_widget.plot(real_time, real_response, pen='g', name='Real Response (BBL)')
+                if sim_time is not None:
+                    self.plot_widget.plot(sim_time, sim_response, pen='c', name='Simulated Response (CLI)')
+
+                metrics = calculate_response_metrics(real_time, real_response)
+                proposed_pids = propose_pids_from_bbl_and_cli(self.current_pids, log_data.copy(), drone_profile, axis_to_analyze)
+                self._update_metrics_display(metrics)
+                self._update_classification_display(metrics)
+                self._update_proposal_display(proposed_pids)
+            elif sim_time is not None:
+                # BBL extraction failed, but we have a CLI, so fall back to simulated view
+                self.plot_widget.plot(sim_time, sim_response, pen='c', name='Simulated Response (CLI)')
+                metrics = calculate_response_metrics(sim_time, sim_response)
+                proposed_pids = propose_pids_from_simulation(self.current_pids, drone_profile)
+                self._update_metrics_display(metrics)
+                self._update_classification_display(metrics)
+                self._update_proposal_display(proposed_pids)
+                self._show_plot_message("Could not extract BBL response. Showing simulation.", corner='topLeft')
+            else:
+                self._show_plot_message("Could not extract or simulate a response.")
 
         # Scenario 2: Only Blackbox data is available
         elif has_bbl:
@@ -301,12 +309,22 @@ class TuningTab(QWidget):
         else:
             self._show_plot_message("Load a Blackbox log or CLI dump to begin.")
 
-    def _show_plot_message(self, message):
+    def _show_plot_message(self, message, corner='center'):
         self._update_metrics_display({})
         self._update_classification_display({})
         self._update_proposal_display({})
-        text_item = pg.TextItem(message, anchor=(0.5, 0.5))
+
+        if corner == 'topLeft':
+            anchor = (0, 0)
+            pos = (self.plot_widget.getViewBox().viewRange()[0][0], self.plot_widget.getViewBox().viewRange()[1][1])
+        else: # center
+            anchor = (0.5, 0.5)
+            pos = None # pyqtgraph will center it
+
+        text_item = pg.TextItem(message, anchor=anchor)
         self.plot_widget.addItem(text_item)
+        if pos:
+            text_item.setPos(pos[0], pos[1])
 
 
     def _update_metrics_display(self, metrics):
