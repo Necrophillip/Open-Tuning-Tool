@@ -1,5 +1,6 @@
 import re
 import numpy as np
+from scipy.optimize import curve_fit
 from fpv_tuner.analysis.utils import apply_smoothing
 
 # A framework for storing drone characteristics. This allows the tuner to adapt
@@ -240,52 +241,104 @@ def classify_step_response(metrics):
     if rise_time < 0.08: return "Critically Damped (Optimal)", "green"
     return "Slightly Overdamped (Slow)", "yellow"
 
-def extract_step_response_from_log(df, axis, **kwargs):
+def first_order_step(t, K, tau):
+    return K * (1 - np.exp(-t / tau))
+
+def second_order_step(t, K, wn, zeta):
+    # Ensure arguments are floats to avoid TypeError with numpy functions
+    K, wn, zeta, t = float(K), float(wn), float(zeta), np.array(t, dtype=float)
+
+    if zeta < 0: return np.zeros_like(t) * np.nan # Non-physical
+
+    # Handle the three cases for a second-order system
+    if np.isclose(zeta, 1): # Critically damped
+        return K * (1 - (1 + wn * t) * np.exp(-wn * t))
+    elif zeta > 1: # Overdamped
+        # To avoid numerical instability, calculate two roots
+        r1 = -wn * zeta + wn * np.sqrt(zeta**2 - 1)
+        r2 = -wn * zeta - wn * np.sqrt(zeta**2 - 1)
+        return K * (1 + (r2 * np.exp(r1 * t) - r1 * np.exp(r2 * t)) / (r1 - r2))
+    else: # Underdamped
+        wd = wn * np.sqrt(1 - zeta**2)
+        phi = np.arccos(zeta)
+        return K * (1 - (1 / np.sqrt(1 - zeta**2)) * np.exp(-zeta * wn * t) * np.sin(wd * t + phi))
+
+
+def extract_step_response_from_log(df, axis):
     axis_map = {'roll': 0, 'pitch': 1, 'yaw': 2}
-    if axis not in axis_map: return None, None
-    rc_col, gyro_col, time_col = f'rcCommand[{axis_map[axis]}]', f'gyroADC[{axis_map[axis]}]', 'time (us)'
-    if not all(c in df.columns for c in [rc_col, gyro_col, time_col]): return None, None
+    rc_col = f'rcCommand[{axis_map.get(axis, -1)}]'
+    gyro_col = f'gyroADC[{axis_map.get(axis, -1)}]'
+    time_col = 'time (us)'
 
-    df[gyro_col] = apply_smoothing(df[gyro_col], kwargs.get('smooth_factor', 5))
-    rc_min, rc_max = df[rc_col].min(), df[rc_col].max()
-    if rc_max == rc_min: return None, None
-    rc_norm = 2 * (df[rc_col] - rc_min) / (rc_max - rc_min) - 1
+    if rc_col not in df.columns: return None
 
-    diff = rc_norm.diff().abs()
-    candidates = df.index[diff > kwargs.get('step_threshold', 0.6)] # Relaxed threshold
-    if len(candidates) == 0: return None, None
+    time = df[time_col].to_numpy() * 1e-6
+    rc = df[rc_col].to_numpy()
+    gyro = df[gyro_col].to_numpy()
+    dt = np.mean(np.diff(time))
 
-    valid_indices, last_time = [], -np.inf
-    min_interval_us = kwargs.get('min_step_interval_s', 0.3) * 1_000_000 # Relaxed interval
-    for idx in candidates:
-        if df.loc[idx, time_col] > last_time + min_interval_us:
-            valid_indices.append(idx)
-            last_time = df.loc[idx, time_col]
+    # --- Step 1: Detect large deflections ---
+    thresh = 0.65 * np.max(np.abs(rc))
+    deflex_mask = np.abs(rc) > thresh
+    starts = np.where(np.diff(deflex_mask.astype(int)) == 1)[0]
+    if len(starts) == 0: return None
 
-    if not valid_indices: return None, None
+    # --- Step 2: Extract initial window and normalize ---
+    initial_responses = []
+    for idx in starts:
+        window = int(0.2 / dt) # 200ms window
+        if idx + window >= len(time): continue
+        t_win = time[idx:idx+window] - time[idx]
+        y_win = gyro[idx:idx+window]
+        delta_u = rc[idx+1] - rc[idx]
+        if abs(delta_u) < 1e-6: continue
+        y_norm = (y_win - y_win[0]) / delta_u
+        initial_responses.append(y_norm)
 
-    all_responses, final_time_s = [], None
-    duration_s = kwargs.get('duration_s', 0.4)
-    for start_idx in valid_indices:
-        start_time = df.loc[start_idx, time_col]
-        end_time = start_time + (duration_s * 1_000_000)
-        win_df = df[(df[time_col] >= start_time) & (df[time_col] < end_time)]
-        if len(win_df) < 2: continue
+    if not initial_responses: return None
+    min_len = min(len(r) for r in initial_responses)
+    t_avg_initial = time[:min_len] - time[0]
+    y_avg_initial = np.mean([r[:min_len] for r in initial_responses], axis=0)
 
-        time_s = (win_df[time_col] - start_time) / 1_000_000
-        gyro_shifted = win_df[gyro_col] - win_df[gyro_col].iloc[0]
-        rc_win = rc_norm.loc[win_df.index]
-        step_mag = rc_win.iloc[-1] - rc_win.iloc[0]
-        if abs(step_mag) < 1e-6: continue
+    # --- Step 3: First fit to estimate tau ---
+    try:
+        popt1_est, _ = curve_fit(first_order_step, t_avg_initial, y_avg_initial, p0=[1, 0.05])
+        tau_est = popt1_est[1]
+    except RuntimeError:
+        tau_est = 0.05  # Fallback
 
-        all_responses.append((gyro_shifted / step_mag).values)
-        if final_time_s is None: final_time_s = time_s.values
+    # --- Step 4: Redimension window to 2*tau and re-process ---
+    final_responses = []
+    window = int(max(0.1, 2 * tau_est) / dt) # Use at least 100ms
+    for idx in starts:
+        if idx + window >= len(time): continue
+        t_win = time[idx:idx+window] - time[idx]
+        y_win = gyro[idx:idx+window]
+        delta_u = rc[idx+1] - rc[idx]
+        if abs(delta_u) < 1e-6: continue
+        y_norm = (y_win - y_win[0]) / delta_u
+        final_responses.append(y_norm)
 
-    if not all_responses: return None, None
+    if not final_responses: return None
+    min_len = min(len(r) for r in final_responses)
+    t_avg = time[:min_len] - time[0]
+    y_avg = np.mean([r[:min_len] for r in final_responses], axis=0)
 
-    max_len = max(len(r) for r in all_responses)
-    padded = [np.pad(r, (0, max_len - len(r)), 'edge') for r in all_responses]
-    avg_resp = np.median(np.vstack(padded), axis=0)
+    # --- Final fits ---
+    try:
+        popt1, _ = curve_fit(first_order_step, t_avg, y_avg, p0=[1, tau_est], maxfev=5000)
+        y_fit1 = first_order_step(t_avg, *popt1)
+    except RuntimeError:
+        popt1, y_fit1 = [np.nan, np.nan], np.zeros_like(t_avg)
 
-    time_vec = final_time_s[:len(avg_resp)] if final_time_s is not None else np.linspace(0, duration_s, len(avg_resp))
-    return time_vec, avg_resp
+    try:
+        popt2, _ = curve_fit(second_order_step, t_avg, y_avg, p0=[np.mean(y_avg[-5:]), 200, 0.5], maxfev=5000, bounds=([0, 0, 0], [2, 1000, 1.5]))
+        y_fit2 = second_order_step(t_avg, *popt2)
+    except RuntimeError:
+        popt2, y_fit2 = [np.nan, np.nan, np.nan], np.zeros_like(t_avg)
+
+    return {
+        "t_avg": t_avg, "y_avg": y_avg,
+        "y_fit1": y_fit1, "popt1": popt1,
+        "y_fit2": y_fit2, "popt2": popt2,
+    }
