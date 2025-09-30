@@ -551,3 +551,174 @@ def classify_step_response(metrics):
              return "Slightly Overdamped (Slow)", "yellow"
     else: # Overshoot is negative
         return "Overdamped (Very Sluggish)", "blue"
+
+
+def tune_from_cli_and_blackbox(current_pids, log_df, drone_profile, axis_to_tune):
+    """
+    Generates a PID proposal by comparing the real step response from a Blackbox
+    log to the simulated response from the current CLI PIDs, and adjusting sliders
+    to compensate for the difference.
+    """
+    # 1. Get real response from BBL
+    real_time, real_response = extract_step_response_from_log(log_df, axis_to_tune)
+    if real_time is None:
+        return {}, {} # Cannot proceed
+    real_metrics = calculate_response_metrics(real_time, real_response)
+
+    # 2. Get simulated response from current PIDs
+    inertia = drone_profile.get("inertia", 0.005)
+    sim_results = simulate_step_response(current_pids, axis=axis_to_tune, inertia=inertia)
+    if not sim_results:
+        return {}, {}
+    sim_metrics = calculate_response_metrics(sim_results["time"], sim_results["response"])
+
+    if not real_metrics or not sim_metrics:
+        return {}, {}
+
+    # 3. Compare metrics and adjust sliders
+    sliders = {"master": 1.0, "tracking": 1.0, "drift": 1.0, "damp": 1.0, "ff": 1.0}
+
+    overshoot_error = real_metrics.get("Overshoot (%)", 0) - sim_metrics.get("Overshoot (%)", 0)
+    rise_time_error = real_metrics.get("Rise Time (s)", 1) - sim_metrics.get("Rise Time (s)", 1)
+
+    # Heuristics to adjust sliders based on the deviation
+    if overshoot_error > 5: # Real response overshoots more than simulation
+        sliders['damp'] += 0.15
+        sliders['tracking'] -= 0.05
+    elif overshoot_error < -5: # Real response is more damped than simulation
+        sliders['damp'] -= 0.15
+
+    if rise_time_error > 0.02: # Real response is slower than simulation
+        sliders['master'] += 0.1
+        sliders['tracking'] += 0.05
+    elif rise_time_error < -0.02: # Real response is faster than simulation
+        sliders['master'] -= 0.1
+
+    # Clamp sliders to a reasonable range
+    for key in sliders:
+        sliders[key] = np.clip(sliders[key], 0.6, 1.8)
+
+    # 4. Compute final PIDs using the original PIDs as a base
+    proposed_pids = _compute_pids_from_sliders(current_pids, sliders)
+
+    return proposed_pids, sliders
+
+
+def tune_from_blackbox(log_df, drone_profile, axis_to_tune):
+    """
+    Generates a PID proposal based solely on a Blackbox log's step response.
+    It uses the drone profile's safe ranges as a baseline.
+    """
+    time, response = extract_step_response_from_log(log_df, axis_to_tune)
+
+    if time is None or response is None:
+        return {}, {} # Cannot proceed
+
+    metrics = calculate_response_metrics(time, response)
+    if not metrics:
+        return {}, {}
+
+    # Start with default sliders
+    sliders = {"master": 1.0, "tracking": 1.0, "drift": 1.0, "damp": 1.0, "ff": 1.0}
+
+    # Adjust sliders based on real-world performance metrics
+    overshoot = metrics.get("Overshoot (%)", 0)
+    rise_time = metrics.get("Rise Time (s)", 1.0)
+
+    # Heuristics to adjust sliders based on BBL analysis
+    if overshoot > 15: # High overshoot
+        sliders['damp'] += 0.2
+        sliders['tracking'] -= 0.1
+    elif overshoot < 2: # Sluggish, no overshoot
+        sliders['damp'] -= 0.15
+
+    if rise_time > 0.1: # Slow response
+        sliders['master'] += 0.15
+        sliders['tracking'] += 0.1
+    elif rise_time < 0.04: # Very sharp response
+        sliders['master'] -= 0.1
+
+    # Clamp sliders to a reasonable range
+    for key in sliders:
+        sliders[key] = np.clip(sliders[key], 0.6, 1.8)
+
+    # Use the 'safe_ranges' from the profile to create a baseline PID set.
+    # We'll aim for the middle of the safe range.
+    base_pids = {}
+    safe_ranges = drone_profile.get("safe_ranges", {})
+    for key, (min_val, max_val) in safe_ranges.items():
+        base_pids[key] = (min_val + max_val) // 2
+
+    # Compute the final PIDs using the adjusted sliders and the baseline
+    proposed_pids = _compute_pids_from_sliders(base_pids, sliders)
+
+    return proposed_pids, sliders
+
+
+def extract_step_response_from_log(df, axis, step_threshold=0.5, duration_s=0.4):
+    """
+    Extracts a step response sequence from a blackbox log DataFrame.
+
+    Args:
+        df (pd.DataFrame): The DataFrame from the blackbox log.
+        axis (str): 'roll', 'pitch', or 'yaw'.
+        step_threshold (float): The normalized value change to detect a step input.
+        duration_s (float): The duration of the response to capture in seconds.
+
+    Returns:
+        A tuple (time_array, response_array) or (None, None) if no step is found.
+    """
+    axis_map = {'roll': 0, 'pitch': 1, 'yaw': 2}
+    if axis not in axis_map:
+        return None, None
+
+    rc_col = f'rcCommand[{axis_map[axis]}]'
+    gyro_col = f'gyroADC[{axis_map[axis]}]'
+    time_col = 'time (us)'
+
+    if rc_col not in df.columns or gyro_col not in df.columns:
+        return None, None
+
+    # Normalize the RC command to a range of approx -1 to 1 for easier thresholding
+    rc_min, rc_max = df[rc_col].min(), df[rc_col].max()
+    if rc_max == rc_min: return None, None # No variation
+    rc_normalized = 2 * (df[rc_col] - rc_min) / (rc_max - rc_min) - 1
+
+    # Find where the normalized command crosses the threshold
+    diff = rc_normalized.diff().abs()
+    step_indices = df.index[diff > step_threshold]
+
+    if len(step_indices) == 0:
+        return None, None # No step found
+
+    # Use the first detected step
+    start_index = step_indices[0]
+
+    # Find the end index based on duration
+    start_time_us = df.loc[start_index, time_col]
+    end_time_us = start_time_us + (duration_s * 1_000_000)
+    end_index = df.index[df[time_col] >= end_time_us].min()
+
+    # If the log ends before the desired duration, use the last sample
+    if np.isnan(end_index):
+        end_index = df.index[-1]
+
+    # Slice the DataFrame for the response window
+    response_df = df.loc[start_index:end_index]
+
+    # Normalize time to start from 0
+    time_us = response_df[time_col] - start_time_us
+    time_s = time_us / 1_000_000
+
+    # Normalize gyro response to start at 0 and have the step go to 1
+    initial_gyro = response_df[gyro_col].iloc[0]
+    gyro_shifted = response_df[gyro_col] - initial_gyro
+
+    # The magnitude of the step is the change in gyro value over the window
+    step_magnitude = gyro_shifted.iloc[-1]
+    if abs(step_magnitude) < 1e-6: # Avoid division by zero if no response
+        return time_s.to_numpy(), gyro_shifted.to_numpy()
+
+    response_normalized = gyro_shifted / step_magnitude
+
+    return time_s.to_numpy(), response_normalized.to_numpy()
