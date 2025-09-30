@@ -1,6 +1,7 @@
 import re
 import numpy as np
 from scipy.signal import lti, step
+from fpv_tuner.analysis.utils import apply_smoothing
 
 def parse_dump(file_path):
     """
@@ -655,70 +656,102 @@ def tune_from_blackbox(log_df, drone_profile, axis_to_tune):
     return proposed_pids, sliders
 
 
-def extract_step_response_from_log(df, axis, step_threshold=0.5, duration_s=0.4):
+def extract_step_response_from_log(df, axis, step_threshold=0.8, duration_s=0.4, min_step_interval_s=0.5, smooth_factor=5):
     """
-    Extracts a step response sequence from a blackbox log DataFrame.
+    Extracts and averages multiple step response sequences from a blackbox log.
 
     Args:
-        df (pd.DataFrame): The DataFrame from the blackbox log.
+        df (pd.DataFrame): The blackbox log DataFrame.
         axis (str): 'roll', 'pitch', or 'yaw'.
-        step_threshold (float): The normalized value change to detect a step input.
-        duration_s (float): The duration of the response to capture in seconds.
+        step_threshold (float): Normalized change in rcCommand to detect a step.
+        duration_s (float): Duration of the response to capture.
+        min_step_interval_s (float): Minimum time between detected steps.
+        smooth_factor (int): Smoothing level for gyro data.
 
     Returns:
-        A tuple (time_array, response_array) or (None, None) if no step is found.
+        A tuple (time_array, averaged_response_array) or (None, None).
     """
     axis_map = {'roll': 0, 'pitch': 1, 'yaw': 2}
-    if axis not in axis_map:
-        return None, None
+    if axis not in axis_map: return None, None
 
     rc_col = f'rcCommand[{axis_map[axis]}]'
     gyro_col = f'gyroADC[{axis_map[axis]}]'
     time_col = 'time (us)'
 
-    if rc_col not in df.columns or gyro_col not in df.columns:
+    if rc_col not in df.columns or gyro_col not in df.columns or time_col not in df.columns:
         return None, None
 
-    # Normalize the RC command to a range of approx -1 to 1 for easier thresholding
+    # 1. Pre-filter gyro data
+    df[gyro_col] = apply_smoothing(df[gyro_col], smooth_factor)
+
+    # 2. Normalize RC command
     rc_min, rc_max = df[rc_col].min(), df[rc_col].max()
-    if rc_max == rc_min: return None, None # No variation
+    if rc_max == rc_min: return None, None
     rc_normalized = 2 * (df[rc_col] - rc_min) / (rc_max - rc_min) - 1
 
-    # Find where the normalized command crosses the threshold
+    # 3. Detect all step transitions
     diff = rc_normalized.diff().abs()
-    step_indices = df.index[diff > step_threshold]
+    candidate_indices = df.index[diff > step_threshold]
 
-    if len(step_indices) == 0:
-        return None, None # No step found
+    if len(candidate_indices) == 0: return None, None
 
-    # Use the first detected step
-    start_index = step_indices[0]
+    # Filter candidates to ensure they are spaced apart by at least min_step_interval
+    valid_step_indices = []
+    last_step_time_us = -np.inf
+    min_interval_us = min_step_interval_s * 1_000_000
 
-    # Find the end index based on duration
-    start_time_us = df.loc[start_index, time_col]
-    end_time_us = start_time_us + (duration_s * 1_000_000)
-    end_index = df.index[df[time_col] >= end_time_us].min()
+    for index in candidate_indices:
+        current_time_us = df.loc[index, time_col]
+        if current_time_us > last_step_time_us + min_interval_us:
+            valid_step_indices.append(index)
+            last_step_time_us = current_time_us
 
-    # If the log ends before the desired duration, use the last sample
-    if np.isnan(end_index):
-        end_index = df.index[-1]
+    if not valid_step_indices: return None, None
 
-    # Slice the DataFrame for the response window
-    response_df = df.loc[start_index:end_index]
+    # 4. Extract and normalize each individual response
+    all_responses = []
+    final_time_s = None
 
-    # Normalize time to start from 0
-    time_us = response_df[time_col] - start_time_us
-    time_s = time_us / 1_000_000
+    for start_index in valid_step_indices:
+        start_time_us = df.loc[start_index, time_col]
+        end_time_us = start_time_us + (duration_s * 1_000_000)
 
-    # Normalize gyro response to start at 0 and have the step go to 1
-    initial_gyro = response_df[gyro_col].iloc[0]
-    gyro_shifted = response_df[gyro_col] - initial_gyro
+        # Define the window for this step
+        window_df = df[(df[time_col] >= start_time_us) & (df[time_col] < end_time_us)]
+        if len(window_df) < 2: continue
 
-    # The magnitude of the step is the change in gyro value over the window
-    step_magnitude = gyro_shifted.iloc[-1]
-    if abs(step_magnitude) < 1e-6: # Avoid division by zero if no response
-        return time_s.to_numpy(), gyro_shifted.to_numpy()
+        # Normalize time for this window
+        time_us = window_df[time_col] - start_time_us
+        time_s = time_us / 1_000_000
 
-    response_normalized = gyro_shifted / step_magnitude
+        # Normalize gyro response
+        gyro_window = window_df[gyro_col]
+        initial_gyro_val = gyro_window.iloc[0]
+        gyro_shifted = gyro_window - initial_gyro_val
 
-    return time_s.to_numpy(), response_normalized.to_numpy()
+        # Determine step magnitude from the RC command change
+        rc_window = rc_normalized.loc[window_df.index]
+        step_magnitude = rc_window.iloc[-1] - rc_window.iloc[0]
+
+        if abs(step_magnitude) < 1e-6: continue
+
+        response_normalized = gyro_shifted / step_magnitude
+
+        all_responses.append(response_normalized.values)
+        if final_time_s is None:
+             final_time_s = time_s.values
+
+    if not all_responses: return None, None
+
+    # 5. Average the responses by taking the median
+    # Pad responses to the same length before stacking
+    max_len = max(len(r) for r in all_responses)
+    padded_responses = [np.pad(r, (0, max_len - len(r)), 'edge') for r in all_responses]
+
+    response_stack = np.vstack(padded_responses)
+    averaged_response = np.median(response_stack, axis=0)
+
+    # Ensure time vector matches the length of the averaged response
+    final_time_s = final_time_s[:len(averaged_response)] if final_time_s is not None else np.linspace(0, duration_s, len(averaged_response))
+
+    return final_time_s, averaged_response
