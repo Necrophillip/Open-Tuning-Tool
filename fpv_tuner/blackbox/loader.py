@@ -4,44 +4,47 @@ import tempfile
 import os
 import glob
 import shutil
+from fpv_tuner.analysis.blackbox_parser import get_blackbox_headers, parse_pid_data_from_headers
 
 def load_log(file_path):
     """
     Loads a Blackbox log file, decoding it if necessary.
+    Also parses PID data from the headers.
 
     Returns:
-        A tuple containing:
-        - pd.DataFrame: The loaded data, or None on failure.
-        - str: An error message if something went wrong, otherwise None.
+        A tuple containing: (DataFrame, pids_dict, error_message)
     """
     file_ext = os.path.splitext(file_path)[1].lower()
 
     if file_ext == '.csv':
-        df = _load_csv_log(file_path)
+        csv_path = file_path
+        df = _load_csv_log(csv_path)
         if df is None:
-            return None, "Failed to load CSV file."
-        return df, None
-
+            return None, None, "Failed to load CSV file."
     elif file_ext in ['.bbl', '.bfl']:
         temp_csv_path, temp_dir, error = _decode_blackbox_log(file_path)
-
         if error:
             if temp_dir and os.path.exists(temp_dir):
                 shutil.rmtree(temp_dir, ignore_errors=True)
-            return None, error
+            return None, None, error
 
-        df = _load_csv_log(temp_csv_path)
+        csv_path = temp_csv_path
+        df = _load_csv_log(csv_path)
 
         # Clean up the temporary directory
         if temp_dir and os.path.exists(temp_dir):
             shutil.rmtree(temp_dir, ignore_errors=True)
 
         if df is None:
-            return None, "Failed to parse the decoded CSV file."
-        return df, None
-
+            return None, None, "Failed to parse the decoded CSV file."
     else:
-        return None, f"Unsupported file type: {file_ext}"
+        return None, None, f"Unsupported file type: {file_ext}"
+
+    # Parse headers and PIDs from the CSV path
+    headers = get_blackbox_headers(csv_path)
+    pids = parse_pid_data_from_headers(headers)
+
+    return df, pids, None
 
 
 def _decode_blackbox_log(file_path):

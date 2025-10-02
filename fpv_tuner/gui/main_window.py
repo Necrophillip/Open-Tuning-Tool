@@ -128,11 +128,11 @@ class MainWindow(QMainWindow):
     def on_load_progress(self, message):
         self.statusBar().showMessage(message)
 
-    def on_load_finished(self, file_path, df, error):
+    def on_load_finished(self, file_path, df, pids, error):
         if error:
             QMessageBox.critical(self, "Error Loading File", f"Failed to load {os.path.basename(file_path)}:\n\n{error}")
         else:
-            self.loaded_logs[file_path] = df
+            self.loaded_logs[file_path] = {'df': df, 'pids': pids}
             item = QListWidgetItem(os.path.basename(file_path))
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
             item.setCheckState(Qt.CheckState.Checked)
