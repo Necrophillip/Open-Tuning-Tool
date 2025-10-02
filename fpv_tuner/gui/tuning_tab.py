@@ -160,6 +160,7 @@ class TuningTab(QWidget):
             self.plot_widget.addItem(text_item)
         else:
             self.plot_widget.setXRange(0, max_settling_time * 1.1, padding=0)
+            self.plot_widget.setYRange(-0.2, 1.8, padding=0)
 
     def _update_metrics_table(self, metrics_data):
         self.metrics_table.setRowCount(len(metrics_data))

@@ -1,7 +1,7 @@
 import numpy as np
 from fpv_tuner.analysis.utils import apply_smoothing
 
-def get_step_response(df, axis, step_threshold_ratio=0.65, duration_s=0.4, smooth_factor=5):
+def get_step_response(df, axis, step_threshold_ratio=0.65, duration_s=0.8, smooth_factor=5):
     """
     Extracts and averages multiple step response sequences from a blackbox log
     to produce a single, robust step response curve.
