@@ -1,18 +1,19 @@
 import os
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QPushButton,
-    QFileDialog, QGroupBox, QLabel, QMessageBox, QComboBox, QScrollArea
+    QFileDialog, QGroupBox, QLabel, QMessageBox, QComboBox, QScrollArea,
+    QTableWidget, QTableWidgetItem, QHeaderView
 )
 from PyQt6.QtCore import Qt
 import pyqtgraph as pg
 import numpy as np
 
-from fpv_tuner.analysis.tuning import get_step_response
+from fpv_tuner.analysis.tuning import get_step_response, calculate_response_metrics
 from fpv_tuner.blackbox.loader import load_log
 
 class TuningTab(QWidget):
-    bb_log_path = None
     loaded_logs = {}
+    plot_colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf']
 
     def __init__(self):
         super().__init__()
@@ -32,6 +33,7 @@ class TuningTab(QWidget):
         # --- Right Panel ---
         right_panel_layout = QVBoxLayout()
         self._create_plot_controls(right_panel_layout)
+        self._create_metrics_display(right_panel_layout)
 
         # --- Main Layout Assembly ---
         main_layout.addWidget(scroll_area, 1)
@@ -40,20 +42,20 @@ class TuningTab(QWidget):
         self._connect_signals()
 
     def _create_load_controls(self, parent_layout):
-        group = QGroupBox("1. Load Blackbox Log")
+        group = QGroupBox("1. Load Logs")
         layout = QVBoxLayout(group)
-        self.bbl_load_widget = QWidget()
-        bbl_load_layout = QHBoxLayout(self.bbl_load_widget)
-        bbl_load_layout.setContentsMargins(0, 0, 0, 0)
-        self.load_bb_button = QPushButton("Load .BBL File")
-        self.load_bb_button.setFixedWidth(150)
-        self.bb_file_label = QLabel("No file loaded.")
-        bbl_load_layout.addWidget(self.load_bb_button)
-        bbl_load_layout.addWidget(self.bb_file_label)
-        self.bb_log_combo = QComboBox()
-        bbl_load_layout.addWidget(self.bb_log_combo)
-        self.bb_log_combo.setVisible(False)
-        layout.addWidget(self.bbl_load_widget)
+
+        self.load_bb_button = QPushButton("Add Blackbox Log(s)...")
+        self.load_bb_button.setToolTip("Add one or more logs to the comparison.")
+        layout.addWidget(self.load_bb_button)
+
+        self.loaded_files_label = QLabel("No logs loaded.")
+        self.loaded_files_label.setWordWrap(True)
+        layout.addWidget(self.loaded_files_label)
+
+        self.clear_logs_button = QPushButton("Clear Plotted Logs")
+        layout.addWidget(self.clear_logs_button)
+
         parent_layout.addWidget(group)
 
     def _create_scope_controls(self, parent_layout):
@@ -65,76 +67,121 @@ class TuningTab(QWidget):
         parent_layout.addWidget(group)
 
     def _create_plot_controls(self, parent_layout):
-        self.plot_widget = pg.PlotWidget(title="Step Response")
+        self.plot_widget = pg.PlotWidget(title="Step Response Comparison")
         self.plot_widget.addLegend()
         self.plot_widget.setLabel('bottom', 'Time (s)')
         self.plot_widget.setLabel('left', 'Normalized Response')
         self.plot_widget.showGrid(x=True, y=True)
-        parent_layout.addWidget(self.plot_widget)
+
+        self.reference_line = pg.InfiniteLine(pos=1.0, angle=0, movable=False, pen={'color': 'w', 'style': Qt.PenStyle.DashLine})
+        self.plot_widget.addItem(self.reference_line)
+
+        parent_layout.addWidget(self.plot_widget, 2)
+
+    def _create_metrics_display(self, parent_layout):
+        group = QGroupBox("Performance Metrics")
+        layout = QVBoxLayout(group)
+        self.metrics_table = QTableWidget()
+        self.metrics_table.setColumnCount(4)
+        self.metrics_table.setHorizontalHeaderLabels(["File", "Overshoot (%)", "Rise Time (s)", "Settling Time (s)"])
+        self.metrics_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.metrics_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.metrics_table.verticalHeader().setVisible(False)
+        self.metrics_table.setMaximumHeight(150)
+        layout.addWidget(self.metrics_table)
+        parent_layout.addWidget(group)
 
     def _connect_signals(self):
         self.load_bb_button.clicked.connect(self.on_load_blackbox)
-        self.bb_log_combo.currentIndexChanged.connect(self.on_bbl_log_selected)
+        self.clear_logs_button.clicked.connect(self.on_clear_logs)
         self.axis_combo.currentTextChanged.connect(self.analyze_and_plot)
 
     def on_load_blackbox(self):
-        filepath, _ = QFileDialog.getOpenFileName(self, "Open Blackbox Log", "", "Blackbox Logs (*.bbl *.bfl *.csv);;All Files (*)")
-        if not filepath: return
-        self.setCursor(Qt.CursorShape.WaitCursor)
-        df, error = load_log(filepath)
-        self.setCursor(Qt.CursorShape.ArrowCursor)
-        if error:
-            QMessageBox.critical(self, "Error Loading Log", error)
+        filepaths, _ = QFileDialog.getOpenFileNames(self, "Open Blackbox Log(s)", "", "Blackbox Logs (*.bbl *.bfl *.csv);;All Files (*)")
+        if not filepaths:
             return
-        self.loaded_logs[filepath] = df
-        self.bb_log_path = filepath
-        self.bb_file_label.setText(os.path.basename(filepath))
+
+        for path in filepaths:
+            if path in self.loaded_logs:
+                continue # Skip already loaded files
+
+            self.setCursor(Qt.CursorShape.WaitCursor)
+            df, error = load_log(path)
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+
+            if error:
+                QMessageBox.critical(self, "Error Loading Log", f"Failed to load {os.path.basename(path)}:\n{error}")
+                continue # Continue to next file
+
+            self.loaded_logs[path] = df
+
+        self._update_loaded_files_label()
         self.analyze_and_plot()
 
-    def on_bbl_log_selected(self, index):
-        filepath = self.bb_log_combo.itemData(index)
-        self.bb_log_path = filepath
-        if not filepath:
-            self.clear_display()
-            return
-        self.bb_file_label.setText(os.path.basename(filepath))
-        self.analyze_and_plot()
+    def on_clear_logs(self):
+        self.loaded_logs.clear()
+        self._update_loaded_files_label()
+        self.clear_display()
 
     def analyze_and_plot(self):
-        if not self.bb_log_path or self.bb_log_path not in self.loaded_logs:
+        self.plot_widget.clear()
+        self.plot_widget.addItem(self.reference_line)
+        if not self.loaded_logs:
             self.clear_display()
             return
 
-        self.plot_widget.clear()
-        log_data = self.loaded_logs[self.bb_log_path]
         axis_to_analyze = self.axis_combo.currentText().lower()
+        all_metrics_data = []
+        max_settling_time = 0.4
 
-        time, response = get_step_response(log_data.copy(), axis_to_analyze)
+        for i, (path, log_data) in enumerate(self.loaded_logs.items()):
+            color = self.plot_colors[i % len(self.plot_colors)]
+            filename = os.path.basename(path)
 
-        if time is not None and response is not None:
-            self.plot_widget.plot(time, response, pen={'color': 'g', 'width': 2}, name=f'{axis_to_analyze.capitalize()} Response')
-        else:
+            time, response = get_step_response(log_data.copy(), axis_to_analyze)
+
+            if time is not None and response is not None:
+                self.plot_widget.plot(time, response, pen={'color': color, 'width': 2}, name=filename)
+                metrics = calculate_response_metrics(time, response)
+                metrics['filename'] = filename
+                all_metrics_data.append(metrics)
+
+                settling_time = metrics.get('Settling Time (s)', 0)
+                if not np.isnan(settling_time) and settling_time > max_settling_time:
+                    max_settling_time = settling_time
+            else:
+                print(f"Warning: Could not extract step response for {filename} on axis {axis_to_analyze}")
+
+        self._update_metrics_table(all_metrics_data)
+
+        if not all_metrics_data:
             self.clear_display()
-            text_item = pg.TextItem(f"Could not extract step response for '{axis_to_analyze.capitalize()}' axis.", anchor=(0.5, 0.5))
+            text_item = pg.TextItem(f"Could not extract step response for '{axis_to_analyze.capitalize()}' axis from any log.", anchor=(0.5, 0.5))
             self.plot_widget.addItem(text_item)
+        else:
+            self.plot_widget.setXRange(0, max_settling_time * 1.1, padding=0)
+
+    def _update_metrics_table(self, metrics_data):
+        self.metrics_table.setRowCount(len(metrics_data))
+        for row, data in enumerate(metrics_data):
+            self.metrics_table.setItem(row, 0, QTableWidgetItem(data.get('filename', 'N/A')))
+            self.metrics_table.setItem(row, 1, QTableWidgetItem(f"{data.get('Overshoot (%)', 0):.2f}"))
+            self.metrics_table.setItem(row, 2, QTableWidgetItem(f"{data.get('Rise Time (s)', 0):.4f}"))
+            self.metrics_table.setItem(row, 3, QTableWidgetItem(f"{data.get('Settling Time (s)', 0):.4f}"))
 
     def clear_display(self):
         self.plot_widget.clear()
+        self.plot_widget.addItem(self.reference_line)
+        self.metrics_table.setRowCount(0)
+
+    def _update_loaded_files_label(self):
+        if not self.loaded_logs:
+            self.loaded_files_label.setText("No logs loaded.")
+        else:
+            filenames = [os.path.basename(path) for path in self.loaded_logs.keys()]
+            self.loaded_files_label.setText(f"Loaded: {', '.join(filenames)}")
 
     def set_data(self, logs):
         self.loaded_logs = logs
-        self.bb_log_combo.clear()
-        if logs:
-            self.bb_log_combo.addItem("Select a loaded BBL...", userData=None)
-            for path in logs.keys():
-                self.bb_log_combo.addItem(os.path.basename(path), userData=path)
-            self.load_bb_button.setVisible(False)
-            self.bb_file_label.setVisible(False)
-            self.bb_log_combo.setVisible(True)
-        else:
-            self.load_bb_button.setVisible(True)
-            self.bb_file_label.setVisible(True)
-            self.bb_log_combo.setVisible(False)
-            self.clear_display()
-            self.bb_log_path = None
-            self.bb_file_label.setText("No file loaded.")
+        self._update_loaded_files_label()
+        self.analyze_and_plot()

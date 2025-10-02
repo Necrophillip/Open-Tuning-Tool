@@ -91,8 +91,20 @@ def calculate_response_metrics(time, response, setpoint=1.0):
     try:
         settling_threshold = 0.05 * abs(final_value)
         unsettled_indices = np.where(np.abs(response - final_value) > settling_threshold)[0]
-        settling_time = time[unsettled_indices[-1]] if len(unsettled_indices) > 0 else time[0]
-    except (IndexError, ZeroDivisionError): settling_time = np.nan
+
+        if len(unsettled_indices) == 0:
+            # If it's always settled, find when it first entered the band.
+            # This is a bit arbitrary, but time[0] is a safe default.
+            settling_time = time[0]
+        else:
+            # The settling time is the time of the sample *after* the last unsettled point.
+            last_unsettled_index = unsettled_indices[-1]
+            if last_unsettled_index + 1 < len(time):
+                settling_time = time[last_unsettled_index + 1]
+            else: # The last point was unsettled, so it never truly settled.
+                settling_time = np.nan
+    except (IndexError, ZeroDivisionError):
+        settling_time = np.nan
     oscillation = 0
     if not np.isnan(settling_time):
         try:
