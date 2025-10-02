@@ -7,7 +7,7 @@ from PyQt6.QtCore import Qt
 import pyqtgraph as pg
 import numpy as np
 
-from fpv_tuner.analysis.tuning import get_step_response, calculate_response_metrics, classify_step_response
+from fpv_tuner.analysis.tuning import get_step_response
 from fpv_tuner.blackbox.loader import load_log
 
 class TuningTab(QWidget):
@@ -32,7 +32,6 @@ class TuningTab(QWidget):
         # --- Right Panel ---
         right_panel_layout = QVBoxLayout()
         self._create_plot_controls(right_panel_layout)
-        self._create_metrics_display(right_panel_layout)
 
         # --- Main Layout Assembly ---
         main_layout.addWidget(scroll_area, 1)
@@ -71,22 +70,7 @@ class TuningTab(QWidget):
         self.plot_widget.setLabel('bottom', 'Time (s)')
         self.plot_widget.setLabel('left', 'Normalized Response')
         self.plot_widget.showGrid(x=True, y=True)
-        parent_layout.addWidget(self.plot_widget, 2)
-
-    def _create_metrics_display(self, parent_layout):
-        metrics_group = QGroupBox("Performance Metrics")
-        metrics_layout = QFormLayout(metrics_group)
-        self.metrics_overshoot = QLabel("N/A")
-        self.metrics_rise_time = QLabel("N/A")
-        self.metrics_settling_time = QLabel("N/A")
-        self.metrics_oscillation = QLabel("N/A")
-        self.classification = QLabel("N/A")
-        metrics_layout.addRow("Overshoot (%):", self.metrics_overshoot)
-        metrics_layout.addRow("Rise Time (s):", self.metrics_rise_time)
-        metrics_layout.addRow("Settling Time (s):", self.metrics_settling_time)
-        metrics_layout.addRow("Oscillation:", self.metrics_oscillation)
-        metrics_layout.addRow("Classification:", self.classification)
-        parent_layout.addWidget(metrics_group, 1)
+        parent_layout.addWidget(self.plot_widget)
 
     def _connect_signals(self):
         self.load_bb_button.clicked.connect(self.on_load_blackbox)
@@ -129,26 +113,13 @@ class TuningTab(QWidget):
 
         if time is not None and response is not None:
             self.plot_widget.plot(time, response, pen={'color': 'g', 'width': 2}, name=f'{axis_to_analyze.capitalize()} Response')
-            metrics = calculate_response_metrics(time, response)
-            self._update_metrics_display(metrics)
         else:
             self.clear_display()
             text_item = pg.TextItem(f"Could not extract step response for '{axis_to_analyze.capitalize()}' axis.", anchor=(0.5, 0.5))
             self.plot_widget.addItem(text_item)
 
-    def _update_metrics_display(self, metrics):
-        self.metrics_overshoot.setText(f"{metrics.get('Overshoot (%)', 0):.2f}")
-        self.metrics_rise_time.setText(f"{metrics.get('Rise Time (s)', 0):.4f}")
-        self.metrics_settling_time.setText(f"{metrics.get('Settling Time (s)', 0):.4f}")
-        self.metrics_oscillation.setText(f"{metrics.get('Oscillation', 0):.2f}")
-
-        text, color = classify_step_response(metrics)
-        self.classification.setText(text)
-        self.classification.setStyleSheet(f"color: {color}; font-weight: bold;")
-
     def clear_display(self):
         self.plot_widget.clear()
-        self._update_metrics_display({})
 
     def set_data(self, logs):
         self.loaded_logs = logs
