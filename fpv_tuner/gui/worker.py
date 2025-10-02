@@ -6,8 +6,8 @@ class LogLoaderWorker(QObject):
     Worker object for loading blackbox logs without freezing the GUI.
     Designed to live in a persistent QThread.
     """
-    # Signal: finished(file_path, dataframe, error_string)
-    finished = pyqtSignal(str, object, str)
+    # Signal: finished(file_path, dataframe, pids_dict, error_string)
+    finished = pyqtSignal(str, object, object, str)
     progress = pyqtSignal(str)
     all_finished = pyqtSignal()
 
@@ -24,10 +24,10 @@ class LogLoaderWorker(QObject):
         for i, file_path in enumerate(file_paths):
             self.progress.emit(f"Loading file {i + 1} of {total_files}: {file_path}...")
             try:
-                df, error = load_log(file_path)
-                self.finished.emit(file_path, df, error)
+                df, pids, error = load_log(file_path)
+                self.finished.emit(file_path, df, pids, error)
             except Exception as e:
-                self.finished.emit(file_path, None, str(e))
+                self.finished.emit(file_path, None, None, str(e))
 
         self.progress.emit("Ready")
         self.all_finished.emit()
