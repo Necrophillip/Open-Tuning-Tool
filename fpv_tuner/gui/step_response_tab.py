@@ -121,11 +121,16 @@ class StepResponseTab(QWidget):
         if not log_name or not axis_name or not self.logs:
             return
 
-        for path, df in self.logs.items():
+        log_data_dict = None
+        for path, data_dict in self.logs.items():
             if os.path.basename(path) == log_name:
-                log_data = df
+                log_data_dict = data_dict
                 break
         else:
+            return
+
+        log_data = log_data_dict.get('df')
+        if log_data is None:
             return
 
         cols = self.AXES_MAP[axis_name]
@@ -165,11 +170,16 @@ class StepResponseTab(QWidget):
         if not log_name or not self.logs:
             return
 
-        for path, df in self.logs.items():
+        log_data_dict = None
+        for path, data_dict in self.logs.items():
             if os.path.basename(path) == log_name:
-                log_data = df
+                log_data_dict = data_dict
                 break
         else:
+            return
+
+        log_data = log_data_dict.get('df')
+        if log_data is None:
             return
 
         # Get the selected axis

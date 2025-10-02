@@ -137,12 +137,18 @@ class NoiseTab(QWidget):
             return
 
         nperseg = int(self.nperseg_combo.currentText())
-        filename, log_data = next(iter(self.logs.items()))
+        # The noise tab only analyzes the first selected log
+        filename, log_data_dict = next(iter(self.logs.items()))
 
-        time_col = self._find_column(log_data, ['time (us)', 'time'])
+        log_df = log_data_dict.get('df')
+        if log_df is None:
+            print(f"Error: No DataFrame found for {os.path.basename(filename)}")
+            return
+
+        time_col = self._find_column(log_df, ['time (us)', 'time'])
         if not time_col:
             return
-        time_us = log_data[time_col]
+        time_us = log_df[time_col]
         time_s = time_us / 1_000_000
 
         # --- PSD Mode ---
@@ -154,12 +160,12 @@ class NoiseTab(QWidget):
                 possible_names = self.SIGNAL_MAP.get(signal_name)
                 if not possible_names: continue
 
-                col_name = self._find_column(log_data, possible_names)
+                col_name = self._find_column(log_df, possible_names)
                 if col_name:
                     color = self.PLOT_COLORS[i % len(self.PLOT_COLORS)]
                     pen = pg.mkPen(color=color)
 
-                    signal_data = log_data[col_name]
+                    signal_data = log_df[col_name]
                     smoothed_signal = apply_smoothing(signal_data, self.smoothing_slider.value())
 
                     self.trace_plot.plot(time_s, smoothed_signal, pen=pen, name=signal_name, autoDownsample=False)
@@ -191,9 +197,9 @@ class NoiseTab(QWidget):
             possible_names = self.SIGNAL_MAP.get(signal_name)
             if not possible_names: return
 
-            col_name = self._find_column(log_data, possible_names)
+            col_name = self._find_column(log_df, possible_names)
             if col_name:
-                signal_data = log_data[col_name]
+                signal_data = log_df[col_name]
                 smoothed_signal = apply_smoothing(signal_data, self.smoothing_slider.value())
                 self.trace_plot.plot(time_s, smoothed_signal, pen='w', name=signal_name, autoDownsample=False)
 

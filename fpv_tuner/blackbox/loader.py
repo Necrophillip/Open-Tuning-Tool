@@ -15,36 +15,31 @@ def load_log(file_path):
         A tuple containing: (DataFrame, pids_dict, error_message)
     """
     file_ext = os.path.splitext(file_path)[1].lower()
+    temp_dir = None
 
-    if file_ext == '.csv':
-        csv_path = file_path
+    try:
+        if file_ext == '.csv':
+            csv_path = file_path
+        elif file_ext in ['.bbl', '.bfl']:
+            temp_csv_path, temp_dir, error = _decode_blackbox_log(file_path)
+            if error:
+                return None, None, error
+            csv_path = temp_csv_path
+        else:
+            return None, None, f"Unsupported file type: {file_ext}"
+
         df = _load_csv_log(csv_path)
         if df is None:
-            return None, None, "Failed to load CSV file."
-    elif file_ext in ['.bbl', '.bfl']:
-        temp_csv_path, temp_dir, error = _decode_blackbox_log(file_path)
-        if error:
-            if temp_dir and os.path.exists(temp_dir):
-                shutil.rmtree(temp_dir, ignore_errors=True)
-            return None, None, error
+            return None, None, f"Failed to load or parse CSV data from {csv_path}"
 
-        csv_path = temp_csv_path
-        df = _load_csv_log(csv_path)
+        headers = get_blackbox_headers(csv_path)
+        pids = parse_pid_data_from_headers(headers)
 
-        # Clean up the temporary directory
+        return df, pids, None
+    finally:
+        # Clean up the temporary directory at the very end
         if temp_dir and os.path.exists(temp_dir):
             shutil.rmtree(temp_dir, ignore_errors=True)
-
-        if df is None:
-            return None, None, "Failed to parse the decoded CSV file."
-    else:
-        return None, None, f"Unsupported file type: {file_ext}"
-
-    # Parse headers and PIDs from the CSV path
-    headers = get_blackbox_headers(csv_path)
-    pids = parse_pid_data_from_headers(headers)
-
-    return df, pids, None
 
 
 def _decode_blackbox_log(file_path):

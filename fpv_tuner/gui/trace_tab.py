@@ -70,15 +70,20 @@ class TraceTab(QWidget):
         if not self.logs:
             return
 
-        for i, (filename, log_data) in enumerate(self.logs.items()):
+        for i, (filename, log_data_dict) in enumerate(self.logs.items()):
             color = self.PLOT_COLORS[i % len(self.PLOT_COLORS)]
             short_name = os.path.basename(filename)
 
-            time_col = self._find_column(log_data, ['time (us)', 'time'])
+            log_df = log_data_dict.get('df')
+            if log_df is None:
+                print(f"Error: No DataFrame found for {short_name}")
+                continue
+
+            time_col = self._find_column(log_df, ['time (us)', 'time'])
             if not time_col:
                 continue
 
-            time_s = log_data[time_col] / 1_000_000
+            time_s = log_df[time_col] / 1_000_000
 
             # Iterate through each axis and its corresponding plot
             smoothing_level = self.smoothing_slider.value()
@@ -86,19 +91,19 @@ class TraceTab(QWidget):
                 current_plot = self.plots[plot_idx]
 
                 # Get columns for this axis
-                rc_col = self._find_column(log_data, [cols['rc']])
-                gyro_col = self._find_column(log_data, [cols['gyro']])
-                dterm_col = self._find_column(log_data, cols['dterm'])
+                rc_col = self._find_column(log_df, [cols['rc']])
+                gyro_col = self._find_column(log_df, [cols['gyro']])
+                dterm_col = self._find_column(log_df, cols['dterm'])
 
                 # Plot data
                 if rc_col:
-                    data = apply_smoothing(log_data[rc_col], smoothing_level)
+                    data = apply_smoothing(log_df[rc_col], smoothing_level)
                     current_plot.plot(time_s, data, pen=pg.mkPen(color, style=pg.QtCore.Qt.PenStyle.SolidLine), name=f"{short_name} - RC Command", autoDownsample=False)
                 if gyro_col:
-                    data = apply_smoothing(log_data[gyro_col], smoothing_level)
+                    data = apply_smoothing(log_df[gyro_col], smoothing_level)
                     current_plot.plot(time_s, data, pen=pg.mkPen(color, style=pg.QtCore.Qt.PenStyle.DashLine), name=f"{short_name} - Gyro", autoDownsample=False)
                 if dterm_col:
-                    data = apply_smoothing(log_data[dterm_col], smoothing_level)
+                    data = apply_smoothing(log_df[dterm_col], smoothing_level)
                     current_plot.plot(time_s, data, pen=pg.mkPen(color, style=pg.QtCore.Qt.PenStyle.DotLine), name=f"{short_name} - D-Term", autoDownsample=False)
 
     def _find_column(self, df, possible_names):
