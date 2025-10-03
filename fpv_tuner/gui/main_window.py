@@ -171,7 +171,11 @@ class MainWindow(QMainWindow):
                 file_path = item.data(Qt.ItemDataRole.UserRole)
                 if file_path in self.loaded_logs:
                     selected_logs[file_path] = self.loaded_logs[file_path]
+
+        # Update tabs that depend on the *selected* logs
         self.trace_tab.set_data(selected_logs)
         self.noise_tab.set_data(selected_logs)
         self.step_response_tab.set_data(selected_logs)
-        self.tuning_tab.set_data(selected_logs) # Keep consistent interface
+
+        # The tuning tab needs all logs to populate its dropdown
+        self.tuning_tab.set_data(self.loaded_logs)

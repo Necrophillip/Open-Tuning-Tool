@@ -13,15 +13,22 @@ from fpv_tuner.analysis.tuning import (
     suggest_pid_changes, generate_cli, DRONE_PROFILES, simulate_step_response
 )
 from fpv_tuner.blackbox.loader import load_log
-from fpv_tuner.analysis.blackbox_parser import get_blackbox_headers, parse_pid_data_from_headers
+from fpv_tuner.analysis.blackbox_parser import parse_pid_data_from_headers
+from fpv_tuner.analysis.cli_parser import parse_pids_from_cli
 from fpv_tuner.gui.suggestion_dialog import SuggestionDialog
 
+
 class TuningTab(QWidget):
-    loaded_logs = {}
     plot_colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf']
 
     def __init__(self):
         super().__init__()
+        # Data storage
+        self.loaded_logs = {}
+        self.cli_pids = {}
+        self.cli_filepath = None
+        self.selected_bbl_path = None
+
         main_layout = QHBoxLayout(self)
 
         # --- Left Panel ---
@@ -48,16 +55,32 @@ class TuningTab(QWidget):
         self._connect_signals()
 
     def _create_load_controls(self, parent_layout):
-        group = QGroupBox("1. Load Logs")
-        layout = QVBoxLayout(group)
-        self.load_bb_button = QPushButton("Add Blackbox Log(s)...")
-        self.load_bb_button.setToolTip("Add one or more logs to the comparison.")
-        layout.addWidget(self.load_bb_button)
-        self.loaded_files_label = QLabel("No logs loaded.")
-        self.loaded_files_label.setWordWrap(True)
-        layout.addWidget(self.loaded_files_label)
-        self.clear_logs_button = QPushButton("Clear Plotted Logs")
-        layout.addWidget(self.clear_logs_button)
+        group = QGroupBox("1. Load Configuration")
+        layout = QFormLayout(group)
+
+        # BBL File Selection
+        self.bbl_combo = QComboBox()
+        self.bbl_combo.setToolTip("Select a loaded Blackbox log for step-response analysis.")
+
+        # CLI File Loading
+        self.load_cli_button = QPushButton("Load CLI Dump...")
+        self.load_cli_button.setToolTip("Load a CLI dump to use its PID values as a baseline.")
+        self.load_cli_button.setFixedSize(self.load_cli_button.sizeHint().width(), self.bbl_combo.sizeHint().height())
+
+        self.loaded_bbl_label = QLabel("<font color='grey'><i>None</i></font>")
+        self.loaded_cli_label = QLabel("<font color='grey'><i>None</i></font>")
+
+        bbl_layout = QHBoxLayout()
+        bbl_layout.addWidget(self.bbl_combo, 1)
+
+        cli_layout = QHBoxLayout()
+        cli_layout.addWidget(self.load_cli_button)
+        cli_layout.addWidget(self.loaded_cli_label, 1, Qt.AlignmentFlag.AlignLeft)
+
+        layout.addRow("Blackbox Log:", bbl_layout)
+        layout.addRow("Loaded BBL:", self.loaded_bbl_label)
+        layout.addRow("CLI Values:", cli_layout)
+
         parent_layout.addWidget(group)
 
     def _create_scope_controls(self, parent_layout):
@@ -119,43 +142,83 @@ class TuningTab(QWidget):
         parent_layout.addWidget(group)
 
     def _connect_signals(self):
-        self.load_bb_button.clicked.connect(self.on_load_blackbox)
-        self.clear_logs_button.clicked.connect(self.on_clear_logs)
+        self.load_cli_button.clicked.connect(self.on_load_cli)
+        self.bbl_combo.currentTextChanged.connect(self.on_bbl_selection_changed)
         self.toggle_view_button.clicked.connect(self.toggle_view)
         self.axis_combo.currentTextChanged.connect(self.analyze_and_plot)
         self.profile_combo.currentTextChanged.connect(self.analyze_and_plot)
         self.suggest_button.clicked.connect(self.on_suggest_tune)
 
     def on_suggest_tune(self):
-        if not self.loaded_logs:
-            QMessageBox.warning(self, "No Logs", "Please load a Blackbox log first.")
+        # Determine the scenario based on loaded data
+        bbl_selected = bool(self.selected_bbl_path)
+        cli_loaded = bool(self.cli_pids)
+
+        if not bbl_selected and not cli_loaded:
+            QMessageBox.warning(self, "No Data", "Please select a Blackbox log or load a CLI dump to get a tuning suggestion.")
             return
-        first_log_path = next(iter(self.loaded_logs))
-        log_data = self.loaded_logs[first_log_path]
-        current_pids = log_data.get('pids', {})
-        if not current_pids:
-            QMessageBox.warning(self, "No PIDs", f"Could not find PID data in the header of {os.path.basename(first_log_path)}.")
-            return
+
         axis = self.axis_combo.currentText().lower()
-        real_analysis = get_step_response(log_data['df'].copy(), axis)
-        if not real_analysis:
-            QMessageBox.warning(self, "Analysis Failed", "Could not extract a step response to base a suggestion on.")
-            return
-        real_time, real_response_raw, setpoint = real_analysis["time"], real_analysis["response"], real_analysis["setpoint"]
-        real_response_normalized = real_response_raw / setpoint
-        metrics = calculate_response_metrics(real_time, real_response_normalized, setpoint=1.0)
-        suggested_pids = suggest_pid_changes(current_pids, metrics, axis)
         profile_name = self.profile_combo.currentText()
         drone_profile = DRONE_PROFILES.get(profile_name, DRONE_PROFILES["Default"])
         inertia = drone_profile.get("inertia", 0.005)
+
+        current_pids = {}
+        real_analysis = None
+
+        # Scenario 1: BBL + CLI (CLI is the authority for PIDs)
+        if bbl_selected and cli_loaded:
+            current_pids = self.cli_pids
+            log_data = self.loaded_logs[self.selected_bbl_path]
+            real_analysis = get_step_response(log_data['df'].copy(), axis)
+            if not real_analysis:
+                QMessageBox.warning(self, "Analysis Failed", f"Could not extract a step response from {os.path.basename(self.selected_bbl_path)} for the {axis.capitalize()} axis.")
+                return
+
+        # Scenario 2: BBL Only
+        elif bbl_selected:
+            log_data = self.loaded_logs[self.selected_bbl_path]
+            current_pids = log_data.get('pids', {})
+            if not current_pids:
+                QMessageBox.warning(self, "No PIDs", f"Could not find PID data in the header of {os.path.basename(self.selected_bbl_path)}.")
+                return
+            real_analysis = get_step_response(log_data['df'].copy(), axis)
+            if not real_analysis:
+                QMessageBox.warning(self, "Analysis Failed", f"Could not extract a step response from {os.path.basename(self.selected_bbl_path)} for the {axis.capitalize()} axis.")
+                return
+
+        # Scenario 3: CLI Only
+        elif cli_loaded:
+            current_pids = self.cli_pids
+            # No real analysis possible, suggestion will be based on profile presets
+            QMessageBox.information(self, "CLI Mode", "Suggesting tune based on CLI values and selected profile. No step response data available.")
+
+        # --- Generate Suggestion ---
+        if real_analysis:
+            real_time, real_response_raw, setpoint = real_analysis["time"], real_analysis["response"], real_analysis["setpoint"]
+            real_response_normalized = real_response_raw / setpoint
+            metrics = calculate_response_metrics(real_time, real_response_normalized, setpoint=1.0)
+            suggested_pids = suggest_pid_changes(current_pids, metrics, axis)
+            real_data = {"time": real_time, "response": real_response_normalized}
+        else: # CLI-only case
+            # Create "dummy" metrics that represent a baseline tune for the profile
+            # This will cause suggest_pid_changes to propose a standard tune.
+            metrics = {'Overshoot (%)': 10, 'Rise Time (s)': 0.1, 'Settling Time (s)': 0.3}
+            suggested_pids = suggest_pid_changes(current_pids, metrics, axis, is_cli_only=True)
+            real_data = None
+
+        # --- Simulate and Show Dialog ---
         suggested_time, suggested_response_normalized = simulate_step_response(suggested_pids, axis, inertia)
         cli_commands = generate_cli(suggested_pids, axis)
-        real_data = {"time": real_time, "response": real_response_normalized}
+
         suggested_data = {"time": suggested_time, "response": suggested_response_normalized}
+
         dialog = SuggestionDialog(current_pids, suggested_pids, axis, cli_commands, real_data, suggested_data, self)
         dialog.exec()
 
     def toggle_view(self):
+        # This function is now less relevant for this tab's primary purpose
+        # but kept for structural consistency if single/multi view is desired later.
         current_index = self.plot_stack.currentIndex()
         if current_index == 0:
             self.plot_stack.setCurrentIndex(1)
@@ -167,25 +230,43 @@ class TuningTab(QWidget):
             self.axis_combo.setVisible(True)
         self.analyze_and_plot()
 
-    def on_load_blackbox(self):
-        filepaths, _ = QFileDialog.getOpenFileNames(self, "Open Blackbox Log(s)", "", "Blackbox Logs (*.bbl *.bfl *.csv);;All Files (*)")
-        if not filepaths: return
-        for path in filepaths:
-            if path in self.loaded_logs: continue
-            self.setCursor(Qt.CursorShape.WaitCursor)
-            df, pids, error = load_log(path)
-            self.setCursor(Qt.CursorShape.ArrowCursor)
-            if error:
-                QMessageBox.critical(self, "Error Loading Log", f"Failed to load {os.path.basename(path)}:\n{error}")
-                continue
-            self.loaded_logs[path] = {'df': df, 'pids': pids}
-        self._update_loaded_files_label()
+    def on_load_cli(self):
+        filepath, _ = QFileDialog.getOpenFileName(self, "Open CLI Dump", "", "Text Files (*.txt);;All Files (*)")
+        if not filepath:
+            return
+
+        try:
+            with open(filepath, 'r') as f:
+                content = f.read()
+
+            pids = parse_pids_from_cli(content)
+            if not pids:
+                raise ValueError("No valid 'set' commands for PIDs found.")
+
+            self.cli_pids = pids
+            self.cli_filepath = filepath
+            self.loaded_cli_label.setText(f"<font color='white'>{os.path.basename(filepath)}</font>")
+            QMessageBox.information(self, "CLI Loaded", f"Successfully parsed PIDs for {', '.join(pids.keys())} axes.")
+
+        except Exception as e:
+            self.cli_pids = {}
+            self.cli_filepath = None
+            self.loaded_cli_label.setText("<font color='red'><i>Load failed</i></font>")
+            QMessageBox.critical(self, "Error", f"Failed to parse CLI file:\n{e}")
+
+    def on_bbl_selection_changed(self, text):
+        if text == "None":
+            self.selected_bbl_path = None
+            self.loaded_bbl_label.setText("<font color='grey'><i>None</i></font>")
+        else:
+            # Find the full path from the filename
+            for path in self.loaded_logs.keys():
+                if os.path.basename(path) == text:
+                    self.selected_bbl_path = path
+                    self.loaded_bbl_label.setText(f"<font color='white'>{text}</font>")
+                    break
         self.analyze_and_plot()
 
-    def on_clear_logs(self):
-        self.loaded_logs.clear()
-        self._update_loaded_files_label()
-        self.clear_display()
 
     def analyze_and_plot(self):
         if self.plot_stack.currentIndex() == 0:
@@ -197,69 +278,68 @@ class TuningTab(QWidget):
         plot_widget = self.single_plot_widget
         plot_widget.clear()
         plot_widget.addItem(self.reference_line)
-        if not self.loaded_logs:
+
+        if not self.selected_bbl_path:
+            self.clear_display()
+            text_item = pg.TextItem("Select a Blackbox log to see its step response.", anchor=(0.5, 0.5))
+            plot_widget.addItem(text_item)
+            return
+
+        axis_to_analyze = self.axis_combo.currentText().lower()
+        log_data = self.loaded_logs.get(self.selected_bbl_path)
+
+        if not log_data or log_data.get('df') is None:
             self.clear_display()
             return
-        axis_to_analyze = self.axis_combo.currentText().lower()
-        all_metrics_data = []
-        max_settling_time = 0.4
-        for i, (path, log_data) in enumerate(self.loaded_logs.items()):
-            color = self.plot_colors[i % len(self.plot_colors)]
-            filename = os.path.basename(path)
-            df = log_data.get('df')
-            if df is None:
-                print(f"Error: No dataframe found for {filename}")
-                continue
-            analysis_results = get_step_response(df.copy(), axis_to_analyze)
-            if analysis_results:
-                time, response, setpoint = analysis_results["time"], analysis_results["response"], analysis_results["setpoint"]
-                normalized_response = response / setpoint
-                plot_name = f"{filename} (Setpoint: {setpoint:.0f} d/s)"
-                plot_widget.plot(time, normalized_response, pen={'color': color, 'width': 2}, name=plot_name)
-                metrics = calculate_response_metrics(time, normalized_response, setpoint=1.0)
-                metrics['filename'] = filename
-                all_metrics_data.append(metrics)
-                settling_time = metrics.get('Settling Time (s)', 0)
-                if not np.isnan(settling_time) and settling_time > max_settling_time:
-                    max_settling_time = settling_time
-            else:
-                print(f"Warning: Could not extract step response for {filename} on axis {axis_to_analyze}")
-        self._update_metrics_table(all_metrics_data)
-        if not all_metrics_data:
-            self.clear_display()
-            text_item = pg.TextItem(f"Could not extract step response for '{axis_to_analyze.capitalize()}' axis from any log.", anchor=(0.5, 0.5))
-            plot_widget.addItem(text_item)
-        else:
+
+        filename = os.path.basename(self.selected_bbl_path)
+        analysis_results = get_step_response(log_data['df'].copy(), axis_to_analyze)
+
+        if analysis_results:
+            time, response, setpoint = analysis_results["time"], analysis_results["response"], analysis_results["setpoint"]
+            normalized_response = response / setpoint
+            plot_name = f"{filename} (Setpoint: {setpoint:.0f} d/s)"
+            plot_widget.plot(time, normalized_response, pen={'color': self.plot_colors[0], 'width': 2}, name=plot_name)
+
+            metrics = calculate_response_metrics(time, normalized_response, setpoint=1.0)
+            metrics['filename'] = filename
+            self._update_metrics_table([metrics])
+
+            settling_time = metrics.get('Settling Time (s)', 0)
+            max_settling_time = 0.4 if np.isnan(settling_time) else settling_time
             plot_widget.setXRange(-0.05, max_settling_time * 1.1, padding=0)
             plot_widget.setYRange(-0.2, 1.8, padding=0)
+        else:
+            self.clear_display()
+            text_item = pg.TextItem(f"Could not extract step response for '{axis_to_analyze.capitalize()}' axis from {filename}.", anchor=(0.5, 0.5))
+            plot_widget.addItem(text_item)
+
 
     def _analyze_and_plot_multi(self):
+        # This view is less critical now but maintained for consistency
         self.metrics_table.setRowCount(0)
+        if not self.selected_bbl_path:
+            for axis, plot_widget in self.multi_plot_widgets.items():
+                plot_widget.clear()
+                plot_widget.addItem(pg.TextItem("Select a Blackbox log.", anchor=(0.5, 0.5)))
+            return
+
+        log_data = self.loaded_logs.get(self.selected_bbl_path)
+        if not log_data: return
+
+        filename = os.path.basename(self.selected_bbl_path)
+        color = self.plot_colors[0]
+
         for axis, plot_widget in self.multi_plot_widgets.items():
             plot_widget.clear()
-            if not self.loaded_logs:
-                plot_widget.addItem(pg.TextItem("No logs loaded.", anchor=(0.5, 0.5)))
-                continue
-            has_data_for_axis = False
-            for i, (path, log_data) in enumerate(self.loaded_logs.items()):
-                color = self.plot_colors[i % len(self.plot_colors)]
-                filename = os.path.basename(path)
-                df = log_data.get('df')
-                if df is None:
-                    print(f"Error: No dataframe found for {filename}")
-                    continue
-                analysis_results = get_step_response(df.copy(), axis)
-                if analysis_results:
-                    has_data_for_axis = True
-                    time = analysis_results.get("time")
-                    response = analysis_results.get("response")
-                    setpoint = analysis_results.get("setpoint")
-                    if time is not None and response is not None and setpoint is not None:
-                        plot_widget.plot(time, response, pen={'color': color, 'width': 2}, name=filename)
-                        ref_line = pg.InfiniteLine(pos=setpoint, angle=0, movable=False, pen={'color': color, 'style': Qt.PenStyle.DashLine})
-                        plot_widget.addItem(ref_line)
-            if not has_data_for_axis:
-                 plot_widget.addItem(pg.TextItem(f"No step response found for this axis.", anchor=(0.5, 0.5)))
+            analysis_results = get_step_response(log_data['df'].copy(), axis)
+            if analysis_results:
+                time, response, setpoint = analysis_results["time"], analysis_results["response"], analysis_results["setpoint"]
+                plot_widget.plot(time, response, pen={'color': color, 'width': 2}, name=filename)
+                ref_line = pg.InfiniteLine(pos=setpoint, angle=0, movable=False, pen={'color': color, 'style': Qt.PenStyle.DashLine})
+                plot_widget.addItem(ref_line)
+            else:
+                plot_widget.addItem(pg.TextItem(f"No step response found for this axis.", anchor=(0.5, 0.5)))
 
     def _update_metrics_table(self, metrics_data):
         self.metrics_table.setRowCount(len(metrics_data))
@@ -276,14 +356,28 @@ class TuningTab(QWidget):
         self.single_plot_widget.addItem(self.reference_line)
         self.metrics_table.setRowCount(0)
 
-    def _update_loaded_files_label(self):
-        if not self.loaded_logs:
-            self.loaded_files_label.setText("No logs loaded.")
-        else:
-            filenames = [os.path.basename(path) for path in self.loaded_logs.keys()]
-            self.loaded_files_label.setText(f"Loaded: {', '.join(filenames)}")
-
     def set_data(self, logs):
         self.loaded_logs = logs
-        self._update_loaded_files_label()
+
+        current_selection = self.bbl_combo.currentText()
+        self.bbl_combo.blockSignals(True)
+        self.bbl_combo.clear()
+
+        self.bbl_combo.addItem("None")
+        filenames = [os.path.basename(p) for p in self.loaded_logs.keys()]
+        self.bbl_combo.addItems(filenames)
+
+        # Restore previous selection if it still exists
+        if current_selection in filenames:
+            self.bbl_combo.setCurrentText(current_selection)
+        else:
+            self.bbl_combo.setCurrentIndex(0) # "None"
+            self.on_bbl_selection_changed("None") # Manually trigger update
+
+        self.bbl_combo.blockSignals(False)
+
+        # If the previously selected item is no longer in the list, this will trigger the "None" case
+        if self.bbl_combo.currentText() != current_selection:
+            self.on_bbl_selection_changed(self.bbl_combo.currentText())
+
         self.analyze_and_plot()

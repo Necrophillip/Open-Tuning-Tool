@@ -145,10 +145,31 @@ def simulate_step_response(pids, axis, inertia, duration=0.8, time_steps=1000):
 
     return t, response
 
-def suggest_pid_changes(pids, metrics, axis):
+# Baseline PID profiles for different types of drones.
+# These are used to provide a reasonable starting point when tuning from a CLI dump without blackbox data.
+BASELINE_PIDS = {
+    "Default":           {'p_roll': 45, 'i_roll': 85, 'd_roll': 38, 'f_roll': 90, 'p_pitch': 55, 'i_pitch': 90, 'd_pitch': 42, 'f_pitch': 95, 'p_yaw': 70, 'i_yaw': 45, 'd_yaw': 0, 'f_yaw': 85},
+    "5-inch Freestyle":  {'p_roll': 45, 'i_roll': 85, 'd_roll': 38, 'f_roll': 90, 'p_pitch': 55, 'i_pitch': 90, 'd_pitch': 42, 'f_pitch': 95, 'p_yaw': 70, 'i_yaw': 45, 'd_yaw': 0, 'f_yaw': 85},
+    "Tinywhoop (1S)":    {'p_roll': 60, 'i_roll': 70, 'd_roll': 55, 'f_roll': 60, 'p_pitch': 65, 'i_pitch': 75, 'd_pitch': 60, 'f_pitch': 65, 'p_yaw': 80, 'i_yaw': 45, 'd_yaw': 0, 'f_yaw': 80},
+    "Cinelifter":        {'p_roll': 35, 'i_roll': 70, 'd_roll': 30, 'f_roll': 70, 'p_pitch': 40, 'i_pitch': 75, 'd_pitch': 35, 'f_pitch': 75, 'p_yaw': 60, 'i_yaw': 45, 'd_yaw': 0, 'f_yaw': 60},
+}
+
+def suggest_pid_changes(pids, metrics, axis, is_cli_only=False, profile_name="Default"):
     """
-    Suggests new PID values based on step response metrics using simple heuristics.
+    Suggests new PID values.
+    If is_cli_only is True, it suggests a baseline tune for the given profile.
+    Otherwise, it suggests changes based on step response metrics.
     """
+    if is_cli_only:
+        baseline = BASELINE_PIDS.get(profile_name, BASELINE_PIDS["Default"])
+        suggested_pids = pids.copy()
+        # Overwrite the PIDs for the specified axis with the baseline values
+        for term in ['p', 'i', 'd', 'f']:
+            key = f"{term}_{axis}"
+            if key in baseline:
+                suggested_pids[key] = baseline[key]
+        return suggested_pids
+
     if not pids or not metrics:
         return {}
 
@@ -161,16 +182,16 @@ def suggest_pid_changes(pids, metrics, axis):
 
     # Heuristic 1: High overshoot means too much P or not enough D
     if overshoot > 15:
-        suggested_pids[p_key] = int(pids.get(p_key, 50) * 0.9) # Decrease P by 10%
-        suggested_pids[d_key] = int(pids.get(d_key, 30) * 1.1) # Increase D by 10%
+        suggested_pids[p_key] = int(pids.get(p_key, 50) * 0.9)  # Decrease P by 10%
+        suggested_pids[d_key] = int(pids.get(d_key, 30) * 1.1)  # Increase D by 10%
 
     # Heuristic 2: Slow rise time means not enough P
     if rise_time > 0.15:
-        suggested_pids[p_key] = int(pids.get(p_key, 50) * 1.1) # Increase P by 10%
+        suggested_pids[p_key] = int(pids.get(p_key, 50) * 1.1)  # Increase P by 10%
 
     # Heuristic 3: Low overshoot means we can be more aggressive
     if overshoot < 2:
-        suggested_pids[d_key] = int(pids.get(d_key, 30) * 0.9) # Decrease D by 10%
+        suggested_pids[d_key] = int(pids.get(d_key, 30) * 0.9)  # Decrease D by 10%
 
     return suggested_pids
 

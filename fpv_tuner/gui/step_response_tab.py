@@ -121,30 +121,35 @@ class StepResponseTab(QWidget):
         if not log_name or not axis_name or not self.logs:
             return
 
-        log_data_dict = None
-        for path, data_dict in self.logs.items():
+        # Find the full path for the selected log name
+        log_path = None
+        for path in self.logs.keys():
             if os.path.basename(path) == log_name:
-                log_data_dict = data_dict
+                log_path = path
                 break
-        else:
+
+        if not log_path:
             return
 
-        log_data = log_data_dict.get('df')
-        if log_data is None:
+        log_data_dict = self.logs.get(log_path)
+        if not log_data_dict:
+            return
+
+        log_df = log_data_dict.get('df')
+        if log_df is None:
             return
 
         cols = self.AXES_MAP[axis_name]
-        rc_col = self._find_column(log_data, [cols['rc']])
+        rc_col = self._find_column(log_df, [cols['rc']])
         if not rc_col:
             return
 
-        rc_data = log_data[rc_col].to_numpy()
+        rc_data = log_df[rc_col].to_numpy()
 
         params = guess_optimal_params(rc_data)
 
         self.threshold_spinbox.setValue(params['threshold'])
         self.std_dev_spinbox.setValue(params['std_dev_max'])
-        # Setting the value will automatically trigger run_analysis due to the connection
 
     def set_data(self, logs):
         self.logs = logs
@@ -153,7 +158,6 @@ class StepResponseTab(QWidget):
         self.log_combo.addItems([os.path.basename(p) for p in self.logs.keys()])
         self.log_combo.blockSignals(False)
 
-        # If there are logs, trigger analysis. Otherwise, clear everything.
         if self.logs:
             self.run_analysis()
         else:
@@ -165,49 +169,52 @@ class StepResponseTab(QWidget):
         self.plot_widget.clear()
         self.metrics_text.clear()
 
-        # Get the selected log file
         log_name = self.log_combo.currentText()
         if not log_name or not self.logs:
             return
 
-        log_data_dict = None
-        for path, data_dict in self.logs.items():
+        # Find the full path for the selected log name
+        log_path = None
+        for path in self.logs.keys():
             if os.path.basename(path) == log_name:
-                log_data_dict = data_dict
+                log_path = path
                 break
-        else:
+
+        if not log_path:
             return
 
-        log_data = log_data_dict.get('df')
-        if log_data is None:
+        log_data_dict = self.logs.get(log_path)
+        if not log_data_dict:
             return
 
-        # Get the selected axis
+        log_df = log_data_dict.get('df')
+        if log_df is None:
+            self.metrics_text.setText(f"Error: No DataFrame found for {log_name}")
+            return
+
         axis_name = self.axis_combo.currentText()
         if not axis_name:
             return
 
-        # --- Get Data Columns ---
-        time_col = self._find_column(log_data, ['time (us)', 'time'])
+        time_col = self._find_column(log_df, ['time (us)', 'time'])
         if not time_col:
             self.metrics_text.setText("Error: 'time (us)' column not found.")
             return
-        time_data = log_data[time_col].to_numpy()
+        time_data = log_df[time_col].to_numpy()
 
         cols = self.AXES_MAP[axis_name]
-        rc_col = self._find_column(log_data, [cols['rc']])
-        gyro_col = self._find_column(log_data, [cols['gyro']])
-        dterm_col = self._find_column(log_data, [cols['dterm']])
+        rc_col = self._find_column(log_df, [cols['rc']])
+        gyro_col = self._find_column(log_df, [cols['gyro']])
+        dterm_col = self._find_column(log_df, [cols['dterm']])
 
         if not rc_col or not gyro_col:
             self.metrics_text.setText(f"Error: Missing rcCommand or gyroADC for {axis_name}.")
             return
 
-        rc_data = log_data[rc_col].to_numpy()
-        gyro_data = log_data[gyro_col].to_numpy()
-        dterm_data = log_data[dterm_col].to_numpy() if dterm_col else None
+        rc_data = log_df[rc_col].to_numpy()
+        gyro_data = log_df[gyro_col].to_numpy()
+        dterm_data = log_df[dterm_col].to_numpy() if dterm_col else None
 
-        # --- Run Analysis ---
         threshold = self.threshold_spinbox.value()
         std_dev_max = self.std_dev_spinbox.value()
         duration_ms = self.duration_spinbox.value()
@@ -215,18 +222,14 @@ class StepResponseTab(QWidget):
             time_data, rc_data, gyro_data, dterm_data, threshold=threshold, std_dev_max=std_dev_max, post_step_duration_ms=duration_ms
         )
 
-        # --- Display Results ---
         self.plot_widget.setTitle(f"{axis_name} Step Response")
 
         if results.get("error"):
             self.metrics_text.setText(f"--- {axis_name} ---\n  {results['error']}\n\n")
             return
 
-        # Plotting
         smoothing_level = self.smoothing_slider.value()
-
-        time_slice_s = results["time_slice"] # Already in seconds
-
+        time_slice_s = results["time_slice"]
         rc_data_smoothed = apply_smoothing(results["rc_slice"], smoothing_level)
         gyro_data_smoothed = apply_smoothing(results["gyro_slice"], smoothing_level)
 
@@ -237,7 +240,6 @@ class StepResponseTab(QWidget):
             dterm_data_smoothed = apply_smoothing(results["dterm_slice"], smoothing_level)
             self.plot_widget.plot(time_slice_s, dterm_data_smoothed, pen=pg.mkPen(self.PLOT_COLORS['dterm'], style=pg.QtCore.Qt.PenStyle.DashLine), name='D-Term', autoDownsample=False)
 
-        # Metrics are calculated on raw data, so they remain correct
         metrics = results["metrics"]
         metrics_text = f"--- {axis_name} Step Metrics ---\n"
         for key, value in metrics.items():
