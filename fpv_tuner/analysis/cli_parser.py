@@ -31,6 +31,19 @@ def parse_pids_from_cli(cli_content: str) -> dict:
         axis = axis.lower()
         if axis not in pids:
             pids[axis] = {}
-        pids[axis][term] = int(value)
+        # We need to map the first letter to the term
+        term_map = {'p': 'p', 'i': 'i', 'd': 'd'}
+        pid_term = term_map.get(term)
+        if pid_term:
+            pids[axis][pid_term] = int(value)
+
+    # A second regex for the 'f' terms, which are separate
+    pattern_f = re.compile(r"set\s+f_([a-zA-Z]+)\s*=\s*(\d+)")
+    matches_f = pattern_f.findall(cli_content)
+    for axis, value in matches_f:
+        axis = axis.lower()
+        if axis not in pids:
+            pids[axis] = {}
+        pids[axis]['f'] = int(value)
 
     return pids

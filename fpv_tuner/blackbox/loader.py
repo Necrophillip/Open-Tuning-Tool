@@ -18,13 +18,23 @@ def load_log(file_path):
     temp_dir = None
 
     try:
+        headers = {}
         if file_ext == '.csv':
             csv_path = file_path
+            headers = get_blackbox_headers(csv_path)
         elif file_ext in ['.bbl', '.bfl']:
             temp_csv_path, temp_dir, error = _decode_blackbox_log(file_path)
             if error:
                 return None, None, error
             csv_path = temp_csv_path
+
+            # Find the separate header file first
+            header_files = glob.glob(os.path.join(temp_dir, '*header*'))
+            if header_files:
+                headers = get_blackbox_headers(header_files[0])
+            else:
+                # Fallback to reading headers from the main data CSV
+                headers = get_blackbox_headers(csv_path)
         else:
             return None, None, f"Unsupported file type: {file_ext}"
 
@@ -32,7 +42,6 @@ def load_log(file_path):
         if df is None:
             return None, None, f"Failed to load or parse CSV data from {csv_path}"
 
-        headers = get_blackbox_headers(csv_path)
         pids = parse_pid_data_from_headers(headers)
 
         return df, pids, None
@@ -56,7 +65,7 @@ def _decode_blackbox_log(file_path):
     except Exception as e:
         return None, None, f"Failed to create temporary directory: {e}"
 
-    command = ['blackbox_decode', file_path, '--output-dir', temp_dir]
+    command = ['blackbox_decode', file_path, '--output-dir', temp_dir, '--save-headers']
 
     try:
         print(f"Running command: {' '.join(command)}")
@@ -69,7 +78,9 @@ def _decode_blackbox_log(file_path):
         )
         print("blackbox_decode process finished.")
 
-        csv_files = glob.glob(os.path.join(temp_dir, '*.csv'))
+        # Glob for csv files, case-insensitively, and filter out header files
+        all_csvs = glob.glob(os.path.join(temp_dir, '*.[cC][sS][vV]'))
+        csv_files = [f for f in all_csvs if 'header' not in os.path.basename(f).lower()]
 
         if not csv_files:
             error_msg = ("Decoding process finished but produced no output file. "
