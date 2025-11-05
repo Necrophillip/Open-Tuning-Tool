@@ -114,8 +114,8 @@ class StepResponseTab(QWidget):
             return
 
         cols = self.AXES_MAP[axis_name]
-        rc_col = self._find_column(log_data, cols['rc'])
-        gyro_col = self._find_column(log_data, cols['gyro'])
+        rc_col = self._find_column(log_data, [cols['rc']])
+        gyro_col = self._find_column(log_data, [cols['gyro']])
 
         if not rc_col or not gyro_col:
             self.metrics_text.setText(f"Error: Missing rcCommand or gyroADC for {axis_name}.")
