@@ -15,6 +15,7 @@ def load_log(file_path):
         A tuple containing: (DataFrame, pids_dict, error_message)
     """
     file_ext = os.path.splitext(file_path)[1].lower()
+    temp_dir = None
 
     if file_ext == '.csv':
         csv_path = file_path
@@ -31,11 +32,9 @@ def load_log(file_path):
         csv_path = temp_csv_path
         df = _load_csv_log(csv_path)
 
-        # Clean up the temporary directory
-        if temp_dir and os.path.exists(temp_dir):
-            shutil.rmtree(temp_dir, ignore_errors=True)
-
         if df is None:
+            if temp_dir and os.path.exists(temp_dir):
+                shutil.rmtree(temp_dir, ignore_errors=True)
             return None, None, "Failed to parse the decoded CSV file."
     else:
         return None, None, f"Unsupported file type: {file_ext}"
@@ -43,6 +42,10 @@ def load_log(file_path):
     # Parse headers and PIDs from the CSV path
     headers = get_blackbox_headers(csv_path)
     pids = parse_pid_data_from_headers(headers)
+
+    # Clean up the temporary directory now that we're done with it
+    if temp_dir and os.path.exists(temp_dir):
+        shutil.rmtree(temp_dir, ignore_errors=True)
 
     return df, pids, None
 

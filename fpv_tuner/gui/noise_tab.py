@@ -137,7 +137,10 @@ class NoiseTab(QWidget):
             return
 
         nperseg = int(self.nperseg_combo.currentText())
-        filename, log_data = next(iter(self.logs.items()))
+        filename, log_data_dict = next(iter(self.logs.items()))
+        log_data = log_data_dict.get('df')
+        if log_data is None:
+            return
 
         time_col = self._find_column(log_data, ['time (us)', 'time'])
         if not time_col:
