@@ -70,7 +70,10 @@ class TraceTab(QWidget):
         if not self.logs:
             return
 
-        for i, (filename, log_data) in enumerate(self.logs.items()):
+        for i, (filename, log_data_dict) in enumerate(self.logs.items()):
+            log_data = log_data_dict.get('df')
+            if log_data is None:
+                continue
             color = self.PLOT_COLORS[i % len(self.PLOT_COLORS)]
             short_name = os.path.basename(filename)
 
