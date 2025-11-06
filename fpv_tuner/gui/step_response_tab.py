@@ -143,7 +143,11 @@ class StepResponseTab(QWidget):
         rc_smooth = savgol_filter(rc_w, 11, 3)
         gyro_smooth = savgol_filter(gyro_w, 11, 3)
 
-        rc_norm, gyro_norm = self._normalize_signals(rc_smooth, gyro_smooth, win_step_idx)
+        rc_norm, gyro_norm, error = self._normalize_signals(rc_smooth, gyro_smooth, win_step_idx)
+
+        if error:
+            self.metrics_text.setText(f"Error: {error}")
+            return
 
         self.plot_widget.plot(time_w, rc_norm, pen=self.PLOT_COLORS['rc'], name='RC Command')
         self.plot_widget.plot(time_w, gyro_norm, pen=self.PLOT_COLORS['gyro'], name='Gyro Response')
@@ -214,13 +218,19 @@ class StepResponseTab(QWidget):
         return time_aligned, rc[start:end], gyro[start:end], window_step_index
 
     def _normalize_signals(self, rc, gyro, step_index):
-        pre_step_rc = np.mean(rc[:step_index])
-        post_step_rc = np.mean(rc[step_index+10:]) # a bit after the step
+        if step_index < 10 or len(rc) - step_index < 20:
+            return None, None, "Not enough data around step"
+
+        pre_step_rc = np.mean(rc[:step_index-5])
+        post_step_rc = np.mean(rc[step_index+10:])
         step_height = post_step_rc - pre_step_rc
+
+        if np.isclose(step_height, 0):
+            return None, None, "Step height is zero"
 
         rc_norm = (rc - pre_step_rc) / step_height
 
-        pre_step_gyro = np.mean(gyro[:step_index])
+        pre_step_gyro = np.mean(gyro[:step_index-5])
         gyro_norm = (gyro - pre_step_gyro) / step_height
 
-        return rc_norm, gyro_norm
+        return rc_norm, gyro_norm, None
