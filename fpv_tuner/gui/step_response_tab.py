@@ -138,12 +138,12 @@ class StepResponseTab(QWidget):
             self.metrics_text.setText("Error: No step detected.")
             return
 
-        time_w, rc_w, gyro_w = self._extract_window(time_data, rc_data, gyro_data, step_index, time_col)
+        time_w, rc_w, gyro_w, win_step_idx = self._extract_window(time_data, rc_data, gyro_data, step_index, time_col)
 
         rc_smooth = savgol_filter(rc_w, 11, 3)
         gyro_smooth = savgol_filter(gyro_w, 11, 3)
 
-        rc_norm, gyro_norm = self._normalize_signals(rc_smooth, gyro_smooth)
+        rc_norm, gyro_norm = self._normalize_signals(rc_smooth, gyro_smooth, win_step_idx)
 
         self.plot_widget.plot(time_w, rc_norm, pen=self.PLOT_COLORS['rc'], name='RC Command')
         self.plot_widget.plot(time_w, gyro_norm, pen=self.PLOT_COLORS['gyro'], name='Gyro Response')
@@ -201,15 +201,26 @@ class StepResponseTab(QWidget):
         start = max(0, step_index - pre_samples)
         end = min(len(time), step_index + post_samples)
 
+        window_step_index = step_index - start
+
         time_window = time[start:end]
         if time_col_name == 'loopIteration':
-            time_window = time_window * (1 / self.loop_freq)
+            time_s = time_window * (1 / self.loop_freq)
         elif time_col_name == 'time (us)':
-            time_window = (time_window - time_window[0]) / 1_000_000
+            time_s = time_window / 1_000_000
 
-        return time_window, rc[start:end], gyro[start:end]
+        time_aligned = time_s - time_s[window_step_index]
 
-    def _normalize_signals(self, rc, gyro):
-        rc_norm = (rc - np.min(rc)) / (np.max(rc) - np.min(rc))
-        gyro_norm = (gyro - np.min(gyro)) / (np.max(gyro) - np.min(gyro))
+        return time_aligned, rc[start:end], gyro[start:end], window_step_index
+
+    def _normalize_signals(self, rc, gyro, step_index):
+        pre_step_rc = np.mean(rc[:step_index])
+        post_step_rc = np.mean(rc[step_index+10:]) # a bit after the step
+        step_height = post_step_rc - pre_step_rc
+
+        rc_norm = (rc - pre_step_rc) / step_height
+
+        pre_step_gyro = np.mean(gyro[:step_index])
+        gyro_norm = (gyro - pre_step_gyro) / step_height
+
         return rc_norm, gyro_norm
