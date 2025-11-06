@@ -114,8 +114,13 @@ class StepResponseTab(QWidget):
             return
 
         cols = self.AXES_MAP[axis_name]
-        rc_col = self._find_column(log_data, [cols['rc']])
-        gyro_col = self._find_column(log_data, [cols['gyro']])
+        rc_col = self._find_column(log_data, cols['rc'])
+        gyro_col = self._find_column(log_data, cols['gyro'])
+
+        if rc_col is None:
+            print(f"⚠️ No se encontró ninguna columna RC en {log_data.columns}")
+        if gyro_col is None:
+            print(f"⚠️ No se encontró ninguna columna Gyro en {log_data.columns}")
 
         if not rc_col or not gyro_col:
             self.metrics_text.setText(f"Error: Missing rcCommand or gyroADC for {axis_name}.")
@@ -174,7 +179,17 @@ class StepResponseTab(QWidget):
         return "\n".join([f"{key}: {value}" for key, value in metrics.items()])
 
     def _find_column(self, df, possible_names):
-        return next((name for name in possible_names if name in df.columns), None)
+        if not isinstance(possible_names, list):
+            possible_names = [possible_names]
+
+        flat_names = []
+        for name in possible_names:
+            if isinstance(name, list):
+                flat_names.extend(name)
+            else:
+                flat_names.append(name)
+
+        return next((name for name in flat_names if name in df.columns), None)
 
     def _detect_step(self, rc_signal, threshold=0.5):
         rc_norm = (rc_signal - np.min(rc_signal)) / (np.max(rc_signal) - np.min(rc_signal))
