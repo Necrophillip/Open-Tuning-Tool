@@ -51,14 +51,14 @@ jobs:
           7z a "Open-Tuning-Tool-windows-x64.zip" dist/Open-Tuning-Tool.exe
 
       - name: Upload Windows artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: windows-executable
           path: Open-Tuning-Tool/dist/Open-Tuning-Tool.exe
           retention-days: 5
 
       - name: Upload Windows zip
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: windows-zip
           path: Open-Tuning-Tool/Open-Tuning-Tool-windows-x64.zip
@@ -110,14 +110,14 @@ jobs:
             "dist/Open-Tuning-Tool-macos.dmg"
 
       - name: Upload macOS DMG
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: macos-dmg
           path: Open-Tuning-Tool/dist/Open-Tuning-Tool-macos.dmg
           retention-days: 5
 
       - name: Upload macOS app
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: macos-app
           path: Open-Tuning-Tool/dist/Open-Tuning-Tool.app
@@ -169,14 +169,14 @@ jobs:
           tar czf "dist/Open-Tuning-Tool-linux-x64.tar.gz" -C appimage_temp Open-Tuning-Tool
 
       - name: Upload Linux executable
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: linux-executable
           path: Open-Tuning-Tool/dist/Open-Tuning-Tool
           retention-days: 5
 
       - name: Upload Linux tar.gz
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: linux-tarball
           path: Open-Tuning-Tool/dist/Open-Tuning-Tool-linux-x64.tar.gz
@@ -188,7 +188,7 @@ jobs:
     name: Create Release with Assets
     if: github.event_name == 'release'
     steps:
-      - uses: actions/download-artifact@v3
+      - uses: actions/download-artifact@v4
 
       - name: Prepare assets
         run: |
