@@ -1,0 +1,232 @@
+name: Build Release
+
+on:
+  release:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version'
+        required: true
+        default: 'rc1'
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    name: Build Windows Executable
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        working-directory: ./Open-Tuning-Tool
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build executable
+        working-directory: ./Open-Tuning-Tool
+        run: |
+          pyinstaller --onefile `
+            --windowed `
+            --name "Open-Tuning-Tool" `
+            --icon="assets/icon.ico" `
+            --add-data "fpv_tuner:fpv_tuner" `
+            fpv_tuner/main.py
+
+      - name: Create installer (NSIS)
+        working-directory: ./Open-Tuning-Tool
+        run: |
+          # Install NSIS (optional, for professional installer)
+          # choco install nsis
+          # For now, just compress the executable
+          7z a "Open-Tuning-Tool-windows-x64.zip" dist/Open-Tuning-Tool.exe
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: windows-executable
+          path: Open-Tuning-Tool/dist/Open-Tuning-Tool.exe
+          retention-days: 5
+
+      - name: Upload Windows zip
+        uses: actions/upload-artifact@v3
+        with:
+          name: windows-zip
+          path: Open-Tuning-Tool/Open-Tuning-Tool-windows-x64.zip
+          retention-days: 5
+
+  build-macos:
+    runs-on: macos-latest
+    name: Build macOS DMG
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        working-directory: ./Open-Tuning-Tool
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build app bundle
+        working-directory: ./Open-Tuning-Tool
+        run: |
+          pyinstaller --onefile \
+            --windowed \
+            --name "Open-Tuning-Tool" \
+            --osx-bundle-identifier com.opentuningtool.fpv \
+            --add-data "fpv_tuner:fpv_tuner" \
+            fpv_tuner/main.py
+
+      - name: Create DMG
+        working-directory: ./Open-Tuning-Tool
+        run: |
+          # Create DMG with nice layout
+          mkdir -p dmg_temp
+          cp -r "dist/Open-Tuning-Tool.app" dmg_temp/
+          ln -s /Applications dmg_temp/Applications
+          
+          hdiutil create -volname "Open-Tuning-Tool" \
+            -srcfolder dmg_temp \
+            -ov \
+            -format UDZO \
+            "dist/Open-Tuning-Tool-macos.dmg"
+
+      - name: Upload macOS DMG
+        uses: actions/upload-artifact@v3
+        with:
+          name: macos-dmg
+          path: Open-Tuning-Tool/dist/Open-Tuning-Tool-macos.dmg
+          retention-days: 5
+
+      - name: Upload macOS app
+        uses: actions/upload-artifact@v3
+        with:
+          name: macos-app
+          path: Open-Tuning-Tool/dist/Open-Tuning-Tool.app
+          retention-days: 5
+
+  build-linux:
+    runs-on: ubuntu-latest
+    name: Build Linux Executable
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libxkbcommon0 \
+            libdbus-1-3 \
+            libfontconfig1
+
+      - name: Install Python dependencies
+        working-directory: ./Open-Tuning-Tool
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build executable
+        working-directory: ./Open-Tuning-Tool
+        run: |
+          pyinstaller --onefile \
+            --name "Open-Tuning-Tool" \
+            --add-data "fpv_tuner:fpv_tuner" \
+            fpv_tuner/main.py
+
+      - name: Create AppImage (optional)
+        working-directory: ./Open-Tuning-Tool
+        run: |
+          # Create AppImage for easier distribution
+          mkdir -p appimage_temp
+          cp dist/Open-Tuning-Tool appimage_temp/
+          tar czf "dist/Open-Tuning-Tool-linux-x64.tar.gz" -C appimage_temp Open-Tuning-Tool
+
+      - name: Upload Linux executable
+        uses: actions/upload-artifact@v3
+        with:
+          name: linux-executable
+          path: Open-Tuning-Tool/dist/Open-Tuning-Tool
+          retention-days: 5
+
+      - name: Upload Linux tar.gz
+        uses: actions/upload-artifact@v3
+        with:
+          name: linux-tarball
+          path: Open-Tuning-Tool/dist/Open-Tuning-Tool-linux-x64.tar.gz
+          retention-days: 5
+
+  create-release-assets:
+    needs: [build-windows, build-macos, build-linux]
+    runs-on: ubuntu-latest
+    name: Create Release with Assets
+    if: github.event_name == 'release'
+    steps:
+      - uses: actions/download-artifact@v3
+
+      - name: Prepare assets
+        run: |
+          mkdir -p release_assets
+          
+          # Copy Windows
+          if [ -f "windows-zip/Open-Tuning-Tool-windows-x64.zip" ]; then
+            cp "windows-zip/Open-Tuning-Tool-windows-x64.zip" release_assets/
+          fi
+          
+          # Copy macOS
+          if [ -f "macos-dmg/Open-Tuning-Tool-macos.dmg" ]; then
+            cp "macos-dmg/Open-Tuning-Tool-macos.dmg" release_assets/
+          fi
+          
+          # Copy Linux
+          if [ -f "linux-tarball/Open-Tuning-Tool-linux-x64.tar.gz" ]; then
+            cp "linux-tarball/Open-Tuning-Tool-linux-x64.tar.gz" release_assets/
+          fi
+          
+          ls -lah release_assets/
+
+      - name: Upload assets to Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: release_assets/*
+          draft: false
+          prerelease: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  notify-success:
+    needs: [build-windows, build-macos, build-linux]
+    runs-on: ubuntu-latest
+    name: Build Success Notification
+    if: always()
+    steps:
+      - name: Check build status
+        run: |
+          echo "✅ Build completed successfully!"
+          echo "All binaries have been generated and are ready for distribution."

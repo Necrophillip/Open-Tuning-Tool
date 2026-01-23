@@ -1,0 +1,17 @@
+# Build dependencies for creating executables and distributions
+# Install with: pip install -r requirements-build.txt
+
+# Core application dependencies
+PyQt6
+pyqtgraph
+pandas
+numpy
+scipy
+
+# Build tools
+pyinstaller>=5.13.0
+wheel
+setuptools
+
+# Optional: for creating installers
+pyinstaller-hooks-contrib
