@@ -73,6 +73,12 @@ Built with modern Python technologies and optimized for high-performance data vi
   - Metrics summary reports
   - GPX track export (GPS data)
 
+- **🛠️ Automated Setup Tools**
+  - One-command installation of blackbox-tools
+  - Cross-platform support (macOS, Linux, Windows)
+  - Automatic OS detection and compilation
+  - Zero-configuration setup process
+
 ---
 
 ## 🛠️ Requirements
@@ -128,7 +134,40 @@ cd Open-Tuning-Tool
 pip install -r Open-Tuning-Tool/requirements.txt
 ```
 
-### Post-Installation: Setup blackbox_decode
+### Post-Installation: Setup blackbox_decode (Automated)
+
+**🎉 NEW: Automated Installation Scripts!**
+
+We've included automated installation scripts that handle everything for you:
+
+#### ✅ Python Method (Recommended)
+```bash
+python3 tools/blackbox_setup/install_blackbox.py
+```
+
+#### ✅ Bash Method (Alternative)
+```bash
+bash tools/blackbox_setup/install_blackbox.sh
+```
+
+**What these scripts do:**
+- 🔄 Clone the official blackbox-tools repository
+- 🖥️ Auto-detect your OS (macOS, Linux, Windows)
+- 🔨 Compile the `blackbox_decode` executable
+- 📦 Install to system PATH automatically
+- ✔️ Verify the installation
+- 🧹 Clean up unnecessary files
+
+**Installation time:** 5-10 minutes (depending on internet speed)
+
+**For detailed information and troubleshooting, see:**
+[tools/blackbox_setup/README.md](Open-Tuning-Tool/tools/blackbox_setup/README.md)
+
+---
+
+### Manual Setup (Optional)
+
+If you prefer to install manually:
 
 1. Download the appropriate `blackbox_decode` binary for your OS from [blackbox-tools releases](https://github.com/betaflight/blackbox-log-viewer/releases)
 2. Place it in a directory in your system PATH (e.g., `/usr/local/bin` on macOS/Linux)
