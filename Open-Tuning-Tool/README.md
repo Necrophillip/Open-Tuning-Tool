@@ -44,9 +44,13 @@ A cross-platform desktop application for analyzing and tuning FPV drones using B
     ```
 
 4.  **Run the application:**
-    -   From the root directory of the project, run the main module:
+    -   From the `Open-Tuning-Tool` directory, run the main module:
     ```bash
-    python -m fpv_tuner.main
+    python3 -m fpv_tuner.main
+    ```
+    -   Or from the parent directory:
+    ```bash
+    cd Open-Tuning-Tool && python3 -m fpv_tuner.main
     ```
 
 ## Project Structure
