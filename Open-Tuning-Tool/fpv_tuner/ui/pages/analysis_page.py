@@ -138,6 +138,16 @@ class AnalysisPage(WizardPage):
             # Task 4: Statistics
             job.report_progress(90, "Computing statistics...")
             results["stats"] = self._analyze_stats(df)
+            job.report_progress(94, "Statistics complete")
+
+            # Task 5: Step responses (per axis) for the review page
+            job.report_progress(95, "Fitting step responses...")
+            results["step_responses"] = self._analyze_step_responses(df)
+            job.report_progress(98, "Step responses complete")
+
+            # Task 6: Noise heatmaps (per axis) for the review page
+            job.report_progress(99, "Building noise heatmaps...")
+            results["heatmaps"] = self._analyze_heatmaps(df)
             job.report_progress(100, "Analysis complete")
 
             return results
@@ -236,6 +246,24 @@ class AnalysisPage(WizardPage):
                 result[label] = stats
         return result
 
+    def _analyze_step_responses(self, df):
+        from fpv_tuner.analysis.summary import compute_step_response_summary
+        result = {}
+        for axis in ("roll", "pitch", "yaw"):
+            summary = compute_step_response_summary(df, axis)
+            if summary is not None:
+                result[axis] = summary
+        return result
+
+    def _analyze_heatmaps(self, df):
+        from fpv_tuner.analysis.summary import compute_noise_heatmap
+        result = {}
+        for axis in ("roll", "pitch", "yaw"):
+            heatmap = compute_noise_heatmap(df, axis)
+            if heatmap is not None:
+                result[axis] = heatmap
+        return result
+
     # ── Callbacks ─────────────────────────────────────────────────
 
     def _on_progress(self, pct, msg):
@@ -324,6 +352,8 @@ class AnalysisPage(WizardPage):
             prescription=prescription,
             cli_diff=cli_diff,
             session_id=session_id,
+            step_responses=results.get("step_responses", {}),
+            heatmaps=results.get("heatmaps", {}),
         ))
         self.validity_changed.emit()
 

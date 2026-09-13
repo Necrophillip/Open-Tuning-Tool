@@ -45,6 +45,9 @@ class AnalysisResult:
     prescription: object = None                         # Prescription
     cli_diff: object = None                             # CliDiff
     session_id: str = ""                                # saved session ID
+    # Review page data (step response + noise heatmaps per axis)
+    step_responses: dict = field(default_factory=dict)  # axis -> summary dict
+    heatmaps: dict = field(default_factory=dict)        # axis -> heatmap dict
 
 
 class AppState(QObject):

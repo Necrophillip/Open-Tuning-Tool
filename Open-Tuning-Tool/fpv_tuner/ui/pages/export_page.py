@@ -1,21 +1,31 @@
 """
-Step 5 — Export new CLI dump.
+Step 4 — Export / Review.
 
-Shows the recommended changes and generates a new CLI dump
-ready to paste into Betaflight Configurator.
+Shows the analysis summary (step responses + noise heatmaps), the
+recommended changes, and generates a new CLI dump ready to apply.
 """
 import os
 
 from PyQt6.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QPlainTextEdit,
-    QFileDialog, QMessageBox,
+    QFileDialog, QMessageBox, QTabWidget, QWidget, QComboBox,
 )
 from PyQt6.QtCore import Qt
+
+import pyqtgraph as pg
 
 from fpv_tuner.ui.pages.base_page import WizardPage
 from fpv_tuner.ui.app_state import AppState
 from fpv_tuner.ui.widgets.serial_port_dialog import SerialPortDialog
 from fpv_tuner.ui.theme import Colors, Spacing, Radius, Typography
+
+
+def _make_thermal_colormap():
+    positions = [0.0, 0.25, 0.5, 0.75, 1.0]
+    colors = [
+        (0, 0, 0), (128, 0, 0), (255, 100, 0), (255, 255, 0), (255, 255, 255),
+    ]
+    return pg.ColorMap(positions, colors)
 
 
 class ExportPage(WizardPage):
@@ -38,6 +48,13 @@ class ExportPage(WizardPage):
             "Based on the analysis, here are the recommended changes. "
             "Copy the CLI commands below or save the full dump."
         ))
+
+        # ── Analysis review (step response + noise heatmaps) ──
+        self.review_tabs = QTabWidget()
+        self.review_tabs.setMaximumHeight(320)
+        self._build_step_response_tab()
+        self._build_heatmap_tab()
+        layout.addWidget(self.review_tabs)
 
         # Changes summary
         self.changes_label = QLabel("No changes recommended yet.")
@@ -120,9 +137,83 @@ class ExportPage(WizardPage):
 
     def on_enter(self):
         self._generate_recommendations()
+        self._render_review()
 
     def can_proceed(self) -> bool:
         return True  # Always can proceed from export
+
+    # ── Review UI ─────────────────────────────────────────────────
+
+    def _build_step_response_tab(self):
+        tab = QWidget()
+        layout = QHBoxLayout(tab)
+        layout.setSpacing(Spacing.SM)
+        self._step_plots = {}
+        for axis in ("roll", "pitch", "yaw"):
+            plot = pg.PlotWidget()
+            plot.setTitle(axis.capitalize())
+            plot.setLabel("bottom", "Time (s)")
+            plot.setLabel("left", "Normalized")
+            plot.showGrid(x=True, y=True, alpha=0.2)
+            plot.setDownsampling(auto=True, mode="peak")
+            self._step_plots[axis] = plot
+            layout.addWidget(plot)
+        self.review_tabs.addTab(tab, "📈 Step Response")
+
+    def _build_heatmap_tab(self):
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setSpacing(Spacing.SM)
+
+        controls = QHBoxLayout()
+        controls.addWidget(QLabel("Axis:"))
+        self._heatmap_axis_combo = QComboBox()
+        self._heatmap_axis_combo.addItems(["roll", "pitch", "yaw"])
+        self._heatmap_axis_combo.currentTextChanged.connect(self._render_heatmap)
+        controls.addWidget(self._heatmap_axis_combo)
+        controls.addStretch()
+        layout.addLayout(controls)
+
+        heatmap_plot_item = pg.PlotItem()
+        heatmap_plot_item.setLabel("bottom", "Throttle (%)")
+        heatmap_plot_item.setLabel("left", "Frequency (Hz)")
+        heatmap_plot_item.setTitle("Throttle vs Noise")
+        self._heatmap_view = pg.ImageView(view=heatmap_plot_item)
+        self._heatmap_view.setColorMap(_make_thermal_colormap())
+        layout.addWidget(self._heatmap_view)
+
+        self.review_tabs.addTab(tab, "🔥 Noise Heatmap")
+
+    def _render_review(self):
+        analysis = self.state.analysis
+        step_responses = analysis.step_responses if analysis else {}
+        for axis, plot in self._step_plots.items():
+            plot.clear()
+            data = step_responses.get(axis)
+            if not data:
+                plot.setTitle(f"{axis.capitalize()} (no data)")
+                continue
+            plot.plot(data["t"], data["response"], pen=pg.mkPen("#42A5F5", width=2))
+            plot.addItem(pg.InfiniteLine(pos=1.0, angle=0, pen=pg.mkPen("white", width=1,
+                         style=Qt.PenStyle.DashLine)))
+            title = axis.capitalize()
+            if data.get("overshoot_pct") is not None:
+                title += f"  ·  {data['overshoot_pct']:.0f}% overshoot"
+            plot.setTitle(title)
+        self._render_heatmap()
+
+    def _render_heatmap(self):
+        analysis = self.state.analysis
+        heatmaps = analysis.heatmaps if analysis else {}
+        axis = self._heatmap_axis_combo.currentText()
+        data = heatmaps.get(axis)
+        if data is None:
+            return
+        hm = data["heatmap"]
+        tr = pg.QtGui.QTransform()
+        tr.scale(100.0 / hm.shape[1], data["freq"][-1] / hm.shape[0])
+        self._heatmap_view.setImage(hm, autoRange=False, transform=tr)
+        self._heatmap_view.getView().setTitle(f"Throttle vs Noise — {axis.capitalize()}")
 
     # ── Recommendation generation ─────────────────────────────────
 
