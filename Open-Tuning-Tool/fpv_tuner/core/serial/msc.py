@@ -11,6 +11,7 @@ needs (enter MSC, wait for mount, locate/copy files, eject).
 """
 from __future__ import annotations
 
+import logging
 import os
 import shutil
 import string
@@ -22,6 +23,8 @@ from typing import Optional
 
 from fpv_tuner.core.serial.connection import SerialConnection
 from fpv_tuner.core.serial.msp import MspClient
+
+logger = logging.getLogger(__name__)
 
 BBL_EXTENSIONS = (".bbl", ".bfl")
 
@@ -84,13 +87,16 @@ def wait_for_mount(
         List of newly appeared mount paths (possibly empty on timeout).
     """
     baseline = set(before or [])
+    logger.info("Waiting up to %.0fs for a new mount point...", timeout)
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         current = set(find_mount_points())
         new = sorted(current - baseline)
         if new:
+            logger.info("New mount appeared after %.1fs", timeout - (deadline - time.monotonic()))
             return new
         time.sleep(interval)
+    logger.warning("No new mount point detected within %.0fs", timeout)
     return []
 
 
@@ -109,6 +115,27 @@ def locate_bbl_files(mount_path: str, max_depth: int = 3) -> list[str]:
             found.append(path)
     found.sort(key=lambda p: p.stat().st_mtime, reverse=True)
     return [str(p) for p in found]
+
+
+def locate_bbl_files_with_retry(
+    mount_path: str, timeout: float = 10.0, interval: float = 0.5,
+) -> list[str]:
+    """
+    Like ``locate_bbl_files`` but retries for ``timeout`` seconds.
+
+    The FAT flash filesystem can take a moment to enumerate its files after
+    the volume is first mounted, so an immediate scan may return nothing.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        found = locate_bbl_files(mount_path)
+        if found:
+            logger.info("Found %d BBL file(s) after %.1fs: %s",
+                        len(found), timeout - (deadline - time.monotonic()), found)
+            return found
+        time.sleep(interval)
+    logger.warning("No BBL files found on %s within %.0fs", mount_path, timeout)
+    return []
 
 
 def _walk(root: Path, depth: int, current: int = 0):
@@ -216,9 +243,23 @@ def _disk_device_for_mount(mount_path: str) -> Optional[str]:
 
 def enter_mass_storage(port: str, baudrate: int = 115200) -> None:
     """Reboot the FC into USB mass-storage mode over MSP."""
+    logger.info("enter_mass_storage: port=%s baud=%d", port, baudrate)
     with SerialConnection(port, baudrate=baudrate) as conn:
         client = MspClient(conn)
+        # Pre-flight: confirm the FC is responsive before rebooting. A freshly
+        # reconnected FC may still be booting and would drop the reboot.
+        for attempt in range(3):
+            try:
+                client.api_version()
+                break
+            except Exception as exc:
+                logger.warning("Pre-flight MSP ping failed (attempt %d): %s", attempt + 1, exc)
+                time.sleep(0.5)
+        else:
+            raise MassStorageError("Flight controller is not responding to MSP — is it connected?")
+        logger.info("FC responsive; requesting mass-storage mode")
         client.reboot_to_mass_storage()
+    logger.info("MSP reboot sent; waiting for the FC to re-enumerate as MSC")
 
 
 def extract_bbl(
@@ -235,35 +276,44 @@ def extract_bbl(
         {"bbl_files": [...], "mount_point": str, "ejected": bool}
     """
     before = find_mount_points()
+    logger.info("Mount points before: %s", before)
     enter_mass_storage(port, baudrate=baudrate)
 
     new_mounts = wait_for_mount(timeout=mount_timeout, before=before)
+    logger.info("New mount points: %s", new_mounts)
     if not new_mounts:
         raise MassStorageError(
             "No new volume appeared after entering mass-storage mode. "
             "Try again, or check the USB connection."
         )
 
-    # Prefer the mount that actually contains a blackbox log.
+    # Prefer the mount that actually contains a blackbox log (with retry,
+    # since the FAT filesystem may take a moment to enumerate).
     mount_point = None
+    bbl_files = []
     for mp in new_mounts:
-        if locate_bbl_files(mp):
+        files = locate_bbl_files_with_retry(mp, timeout=8.0)
+        if files:
             mount_point = mp
+            bbl_files = files
             break
     if mount_point is None:
         mount_point = new_mounts[0]
+        bbl_files = locate_bbl_files_with_retry(mount_point, timeout=8.0)
+    logger.info("Selected mount point: %s", mount_point)
 
-    bbl_files = locate_bbl_files(mount_point)
     if not bbl_files:
         raise MassStorageError(
             f"No .BBL files found on the mounted volume '{mount_point}'."
         )
 
     copied = copy_bbl_files(bbl_files, dest_dir)
+    logger.info("Copied %d file(s) to %s: %s", len(copied), dest_dir, copied)
 
     ejected = False
     if eject_after:
         ejected = eject(mount_point)
+        logger.info("Eject %s -> %s", mount_point, ejected)
 
     return {
         "bbl_files": copied,

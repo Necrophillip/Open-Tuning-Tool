@@ -8,9 +8,12 @@ storage mode.
 """
 from __future__ import annotations
 
+import logging
 from typing import Optional
 
 from fpv_tuner.core.serial.connection import SerialConnection, SerialConnectionError
+
+logger = logging.getLogger(__name__)
 
 MSP_PREFIX = b"$M"
 
@@ -96,6 +99,7 @@ class MspClient:
         self.timeout = timeout
 
     def _request(self, command: int, payload: bytes = b"") -> bytes:
+        logger.info("MSP request command=%d payload=%r", command, payload)
         self.conn.write(encode_msp(command, payload))
         buf = bytearray()
         remaining = self.timeout
@@ -111,6 +115,7 @@ class MspClient:
                 except MspError:
                     raise
                 if result is not None:
+                    logger.info("MSP response command=%d payload=%r", result[0], result[1])
                     return result[1]
             else:
                 remaining -= 0.1
@@ -138,8 +143,10 @@ class MspClient:
         Send a reboot command.  The FC will not send a response for some
         modes (bootloader/MSC), so this is fire-and-forget.
         """
+        logger.info("Sending MSP_REBOOT mode=%d", mode)
         self.conn.write(encode_msp(MSP_REBOOT, bytes([mode & 0xFF])))
 
     def reboot_to_mass_storage(self) -> None:
         """Reboot into USB mass-storage mode (exposes the flash as a drive)."""
+        logger.info("Requesting reboot to mass-storage mode")
         self.reboot(MSP_REBOOT_MSC)

@@ -8,10 +8,13 @@ never blocks indefinitely on a dead or disconnected port.
 from __future__ import annotations
 
 import time
+import logging
 from typing import Optional
 
 import serial
 from serial.serialutil import SerialException
+
+logger = logging.getLogger(__name__)
 
 
 class SerialConnectionError(RuntimeError):
@@ -42,6 +45,7 @@ class SerialConnection:
     def open(self) -> "SerialConnection":
         if self._serial and self._serial.is_open:
             return self
+        logger.info("Opening serial port %s @ %d baud", self.port, self.baudrate)
         try:
             self._serial = serial.Serial(
                 port=self.port,
@@ -50,13 +54,16 @@ class SerialConnection:
                 write_timeout=self.write_timeout,
             )
         except (SerialException, OSError, ValueError) as exc:
+            logger.error("Failed to open %s: %s", self.port, exc)
             raise SerialConnectionError(
                 f"Could not open serial port '{self.port}': {exc}"
             ) from exc
+        logger.info("Serial port %s opened", self.port)
         return self
 
     def close(self) -> None:
         if self._serial is not None:
+            logger.info("Closing serial port %s", self.port)
             try:
                 if self._serial.is_open:
                     self._serial.close()
@@ -85,6 +92,7 @@ class SerialConnection:
     def write(self, data) -> int:
         if isinstance(data, str):
             data = data.encode("utf-8")
+        logger.debug("TX (%d bytes): %r", len(data), data)
         try:
             return self._require_open().write(data)
         except (SerialException, OSError) as exc:
@@ -133,6 +141,7 @@ class SerialConnection:
                 if chunk:
                     buf.extend(chunk)
                     if buf.endswith(terminator):
+                        logger.debug("RX (%d bytes): %r", len(buf), bytes(buf))
                         return bytes(buf)
             raise SerialConnectionError(
                 f"Serial read_until timed out on '{self.port}' "

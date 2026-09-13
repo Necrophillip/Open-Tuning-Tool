@@ -9,6 +9,7 @@ apply recommended settings directly to a connected flight controller.
 """
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass, field
 from typing import Optional
@@ -16,6 +17,8 @@ from typing import Optional
 from fpv_tuner.core.serial.connection import SerialConnection, SerialConnectionError
 from fpv_tuner.core.cli.schema import CliSchema
 from fpv_tuner.core.cli.validator import validate_change, normalize_name
+
+logger = logging.getLogger(__name__)
 
 
 class CliSessionError(RuntimeError):
@@ -87,6 +90,7 @@ class CliSession:
 
     def enter(self) -> str:
         """Enter CLI mode and return the banner text."""
+        logger.info("Entering CLI mode on %s", self.conn.port)
         self.conn.flush()
         self.conn.write(b"#")
         banner = None
@@ -95,15 +99,18 @@ class CliSession:
                 banner = self._read_to_prompt(self.enter_timeout)
                 break
             except CliSessionError:
+                logger.warning("No CLI prompt after '#'; retrying")
                 self.conn.write(b"#")  # some firmwares need a second '#'
         else:
             raise CliSessionError("Could not enter CLI mode — is the port connected to a Betaflight FC?")
 
         self._entered = True
+        logger.info("CLI banner: %r", banner[:120] if banner else "")
 
         # Betaflight swallows the *first* command after entering CLI mode
         # (it is echoed but never executed). Send a blank line to absorb it
         # so the first real command is not silently lost.
+        logger.debug("Sending warm-up blank line")
         self.conn.write(b"\n")
         try:
             self._read_to_prompt(self.enter_timeout)
@@ -115,8 +122,11 @@ class CliSession:
     def _command(self, cmd: str) -> str:
         if not self._entered:
             raise CliSessionError("Not in CLI mode — call enter() first")
+        logger.info("CLI >> %s", cmd)
         self.conn.write((cmd + "\n").encode("utf-8"))
-        return self._read_to_prompt(self.command_timeout)
+        resp = self._read_to_prompt(self.command_timeout)
+        logger.info("CLI << %r", resp)
+        return resp
 
     def get(self, name: str) -> str:
         return self._command(f"get {name}")
@@ -185,6 +195,8 @@ def write_changes_to_fc(
         from fpv_tuner.core.cli import get_schema
         schema = get_schema(None)
 
+    logger.info("write_changes_to_fc: port=%s schema=%s changes=%d", port, schema.version, len(changes) if not isinstance(changes, dict) else len(changes))
+
     result = WriteResult()
     pairs = _normalize_changes(changes)
 
@@ -195,14 +207,17 @@ def write_changes_to_fc(
             canonical = normalize_name(schema, name)
             problems = validate_change(schema, canonical, value)
         except Exception as exc:
+            logger.warning("Rejected %s: %s", name, exc)
             result.errors.append(str(exc))
             continue
         if problems:
+            logger.warning("Rejected %s=%s: %s", name, value, "; ".join(problems))
             result.errors.append(f"{name}: {'; '.join(problems)}")
             continue
         plan.append((canonical, value))
 
     if result.errors:
+        logger.error("Validation failed; aborting write: %s", result.errors)
         result.success = False
         return result
 
@@ -237,12 +252,15 @@ def write_changes_to_fc(
                     result.applied.append(f"{name} = {value}")
 
             if save:
+                logger.info("Saving and rebooting the FC")
                 result.raw_log.append(cli.save())
     except (CliSessionError, SerialConnectionError) as exc:
+        logger.error("Write failed: %s", exc)
         result.errors.append(str(exc))
         result.success = False
         return result
 
+    logger.info("Write complete: %d setting(s) applied", result.n_applied)
     result.success = True
     return result
 
