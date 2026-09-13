@@ -13,6 +13,8 @@ from fpv_tuner.gui.trace_tab import TraceTab
 from fpv_tuner.gui.step_response_tab import StepResponseTab
 from fpv_tuner.ui.wizard_shell import WizardShell
 from fpv_tuner.ui.app_state import AppState
+from fpv_tuner.ui.jobs import JobRunner
+from fpv_tuner.ui.widgets.serial_port_dialog import SerialPortDialog
 from fpv_tuner.ui.theme import Colors, Spacing, Typography
 
 class MainWindow(QMainWindow):
@@ -27,6 +29,9 @@ class MainWindow(QMainWindow):
 
         # Central app state shared between wizard and advanced views
         self.app_state = AppState(self)
+
+        # Background job runner for serial extraction / CLI writes
+        self.jobs = JobRunner(self)
 
         self._create_central_stack()
         self._create_actions()
@@ -99,6 +104,12 @@ class MainWindow(QMainWindow):
         self.open_action.setStatusTip("Open one or more log files")
         self.open_action.triggered.connect(self.open_log_files)
 
+        self.extract_action = QAction("🛰 &Extract from Flight Controller...", self)
+        self.extract_action.setStatusTip(
+            "Connect the FC via USB and pull its blackbox log via mass-storage mode"
+        )
+        self.extract_action.triggered.connect(self.extract_from_fc)
+
         clear_icon = style.standardIcon(QStyle.StandardPixmap.SP_TrashIcon) if style else QAction().icon()
         self.clear_action = QAction(clear_icon, "&Clear All Logs", self)
         self.clear_action.setStatusTip("Remove all loaded logs")
@@ -135,6 +146,7 @@ class MainWindow(QMainWindow):
         file_menu = menu_bar.addMenu("&File")
         if file_menu:
             file_menu.addAction(self.open_action)
+            file_menu.addAction(self.extract_action)
             file_menu.addAction(self.clear_action)
             file_menu.addSeparator()
             file_menu.addAction(self.merge_segments_action)
@@ -191,6 +203,45 @@ class MainWindow(QMainWindow):
         status_bar = self.statusBar()
         if status_bar is not None:
             status_bar.showMessage(message)
+
+    def extract_from_fc(self):
+        port = SerialPortDialog.get_port(self, "Extract Blackbox from FC")
+        if not port:
+            return
+
+        dest_dir = os.path.expanduser("~/Downloads")
+        merge = self.merge_segments_action.isChecked()
+        self.extract_action.setEnabled(False)
+        status_bar = self.statusBar()
+        if status_bar is not None:
+            status_bar.showMessage("Entering mass-storage mode on the FC...")
+
+        def _run(job):
+            from fpv_tuner.core.serial.msc import extract_bbl
+            from fpv_tuner.blackbox.loader import load_log
+
+            job.report_progress(20, "Entering mass-storage mode...")
+            result = extract_bbl(port, dest_dir)
+            job.report_progress(80, "Loading extracted log...")
+            df, pids, error = load_log(result["bbl_files"][0], merge_all_segments=merge)
+            return result["bbl_files"][0], df, pids, error
+
+        def _done(result):
+            file_path, df, pids, error = result
+            self.extract_action.setEnabled(True)
+            self.on_load_finished(file_path, df, pids, error)
+            self.on_all_loads_finished()
+
+        def _error(err):
+            self.extract_action.setEnabled(True)
+            QMessageBox.critical(
+                self, "Extraction Failed",
+                f"Could not extract the blackbox log:\n\n{err.splitlines()[-1] if err else 'Unknown error'}",
+            )
+            if status_bar is not None:
+                status_bar.showMessage("Ready", 3000)
+
+        self.jobs.run(fn=_run, on_result=_done, on_error=_error)
 
     def on_load_finished(self, file_path, df, pids, error):
         if error:

@@ -6,11 +6,12 @@ all segments automatically in a background thread.
 """
 import os
 
-from PyQt6.QtWidgets import QVBoxLayout, QLabel, QProgressBar
+from PyQt6.QtWidgets import QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QProgressBar
 from PyQt6.QtCore import Qt
 
 from fpv_tuner.ui.pages.base_page import WizardPage
 from fpv_tuner.ui.widgets.dropzone import DropZone
+from fpv_tuner.ui.widgets.serial_port_dialog import SerialPortDialog
 from fpv_tuner.ui.app_state import AppState, LogSession
 from fpv_tuner.ui.theme import Colors, Spacing, Typography
 
@@ -43,6 +44,19 @@ class LogPage(WizardPage):
         )
         self.dropzone.files_dropped.connect(self._on_files_dropped)
         layout.addWidget(self.dropzone, 1)
+
+        # Extract directly from a connected flight controller
+        extract_row = QHBoxLayout()
+        self.extract_btn = QPushButton("🛰  Extract from Flight Controller")
+        self.extract_btn.setProperty("variant", "ghost")
+        self.extract_btn.setToolTip(
+            "Connect the FC via USB and pull its blackbox log via mass-storage mode."
+        )
+        self.extract_btn.clicked.connect(self._on_extract_clicked)
+        extract_row.addStretch()
+        extract_row.addWidget(self.extract_btn)
+        extract_row.addStretch()
+        layout.addLayout(extract_row)
 
         # Progress bar (hidden by default)
         self.progress = QProgressBar()
@@ -131,6 +145,60 @@ class LogPage(WizardPage):
         self.dropzone.set_error(error_msg.splitlines()[-1] if error_msg else "Unknown error")
         self.dropzone.set_enabled(True)
         self.validity_changed.emit()
+
+    # ── Extract from FC (mass-storage mode) ───────────────────────
+
+    def _on_extract_clicked(self):
+        port = SerialPortDialog.get_port(self, "Extract Blackbox from FC")
+        if not port:
+            return
+
+        self.extract_btn.setEnabled(False)
+        self.progress.show()
+        self.info_card.hide()
+
+        dest_dir = os.path.expanduser("~/Downloads")
+
+        def _run(job):
+            from fpv_tuner.core.serial.msc import extract_bbl
+            from fpv_tuner.blackbox.loader import load_log
+
+            job.report_progress(20, "Entering mass-storage mode...")
+            result = extract_bbl(port, dest_dir)
+            job.report_progress(80, "Loading extracted log...")
+            df, pids, error = load_log(result["bbl_files"][0], merge_all_segments=True)
+            if error:
+                raise RuntimeError(error)
+            return result["bbl_files"][0], df, pids
+
+        self._jobs.run(
+            fn=_run,
+            on_result=self._on_extract_success,
+            on_error=self._on_extract_error,
+            on_finished=self._on_extract_finished,
+        )
+
+    def _on_extract_success(self, result):
+        file_path, df, pids = result
+        self._on_load_success(file_path, (df, pids))
+
+    def _on_extract_error(self, error_msg: str):
+        self.info_card.setText(
+            f"❌  Extraction failed: {error_msg.splitlines()[-1] if error_msg else 'Unknown error'}"
+        )
+        self.info_card.setStyleSheet(f"""
+            background-color: {Colors.DANGER_MUTED};
+            color: {Colors.DANGER};
+            border: 1px solid {Colors.DANGER};
+            border-radius: 10px;
+            padding: {Spacing.MD}px;
+            font-size: {Typography.SIZE_BODY}px;
+        """)
+        self.info_card.show()
+
+    def _on_extract_finished(self):
+        self.extract_btn.setEnabled(True)
+        self.progress.hide()
 
     # ── Contract ──────────────────────────────────────────────────
 

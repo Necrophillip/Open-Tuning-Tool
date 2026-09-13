@@ -13,6 +13,16 @@ from fpv_tuner.core.serial.ports import SerialPortInfo, SerialPortError, list_se
 from fpv_tuner.core.serial.connection import SerialConnection, SerialConnectionError
 from fpv_tuner.core.serial.msp import MspClient, MspError, encode_msp, decode_msp, MSP_REBOOT_MSC
 from fpv_tuner.core.serial.cli import CliSession, CliSessionError, WriteResult, write_changes_to_fc
+from fpv_tuner.core.serial.msc import (
+    MassStorageError,
+    find_mount_points,
+    wait_for_mount,
+    locate_bbl_files,
+    copy_bbl_files,
+    eject,
+    enter_mass_storage,
+    extract_bbl,
+)
 
 __all__ = [
     "SerialPortInfo",
@@ -29,4 +39,12 @@ __all__ = [
     "CliSessionError",
     "WriteResult",
     "write_changes_to_fc",
+    "MassStorageError",
+    "find_mount_points",
+    "wait_for_mount",
+    "locate_bbl_files",
+    "copy_bbl_files",
+    "eject",
+    "enter_mass_storage",
+    "extract_bbl",
 ]
