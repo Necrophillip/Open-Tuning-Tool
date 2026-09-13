@@ -277,9 +277,12 @@ class AnalysisPage(WizardPage):
 
             df = self.state.log.dataframe
             cli_settings = self.state.cli.settings if self.state.has_cli else None
+            cli_version = self.state.cli.version if self.state.has_cli else None
 
             engine_findings = run_diagnostics(df, cli_settings)
-            prescription = generate_prescription(engine_findings, cli_settings)
+            prescription = generate_prescription(
+                engine_findings, cli_settings, cli_version=cli_version,
+            )
             cli_diff = diff_from_prescription(cli_settings, prescription)
 
             # Count issues for summary

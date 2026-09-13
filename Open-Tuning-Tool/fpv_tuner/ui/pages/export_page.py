@@ -128,11 +128,18 @@ class ExportPage(WizardPage):
 
             df = self.state.log.dataframe
             cli_settings = self.state.cli.settings if self.state.has_cli else None
+            cli_version = self.state.cli.version if self.state.has_cli else None
             findings = run_diagnostics(df, cli_settings)
-            prescription = generate_prescription(findings, cli_settings)
+            prescription = generate_prescription(
+                findings, cli_settings, cli_version=cli_version,
+            )
             diff = diff_from_prescription(cli_settings, prescription)
 
         from fpv_tuner.core.cli_diff import format_diff_html, format_cli_commands
+        from fpv_tuner.core.cli import get_schema
+
+        cli_version = self.state.cli.version if self.state.has_cli else None
+        schema = get_schema(cli_version)
 
         if not diff.has_changes:
             self.changes_label.setText(
@@ -151,7 +158,7 @@ class ExportPage(WizardPage):
         self.changes_label.setText(html)
 
         # CLI commands
-        cli_text = format_cli_commands(diff)
+        cli_text = format_cli_commands(diff, schema=schema)
         self.cli_preview.setPlainText(cli_text)
 
     # ── Actions ───────────────────────────────────────────────────

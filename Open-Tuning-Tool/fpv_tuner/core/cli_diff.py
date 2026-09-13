@@ -189,24 +189,62 @@ def format_diff_html(diff: CliDiff) -> str:
     return "".join(parts)
 
 
-def format_cli_commands(diff: CliDiff) -> str:
+def format_cli_commands(
+    diff: CliDiff,
+    schema=None,
+    profile: int = 0,
+    rateprofile: int = 0,
+) -> str:
     """
     Format as Betaflight CLI commands ready to paste.
 
+    When a ``CliSchema`` is supplied, commands are grouped by scope and the
+    relevant ``profile`` / ``rateprofile`` selector is emitted before
+    profile-scoped settings, producing output that is valid against the
+    real Betaflight CLI.
+
     Returns lines like:
-        set gyro_lowpass_hz = 150
+        profile 0
+        set p_roll = 47
+        rateprofile 0
+        set roll_rc_rate = 100
         save
     """
     if not diff.has_changes:
         return "# No changes needed\n"
 
     lines = ["# FPV Tuner — Recommended changes", ""]
+
+    def _set_line(entry) -> str:
+        if entry.kind == "removed":
+            return f"# Removed: set {entry.setting} = {entry.old_value}"
+        return f"set {entry.setting} = {entry.new_value}"
+
+    if schema is None:
+        for entry in diff.entries:
+            lines.append(_set_line(entry))
+        lines.append("save")
+        return "\n".join(lines)
+
+    # Bucket entries by scope (unknown scope → master).
+    buckets: dict[str, list] = {}
+    order = ["master", "profile", "rateprofile", "hardware"]
     for entry in diff.entries:
-        if entry.kind == "changed":
-            lines.append(f"set {entry.setting} = {entry.new_value}")
-        elif entry.kind == "added":
-            lines.append(f"set {entry.setting} = {entry.new_value}")
-        elif entry.kind == "removed":
-            lines.append(f"# Removed: set {entry.setting} = {entry.old_value}")
+        var = schema.get(entry.setting)
+        scope = var.scope if var is not None else "master"
+        buckets.setdefault(scope, []).append(entry)
+
+    for scope in order:
+        entries = buckets.get(scope)
+        if not entries:
+            continue
+        if scope == "profile":
+            lines.append(f"profile {profile}")
+        elif scope == "rateprofile":
+            lines.append(f"rateprofile {rateprofile}")
+        for entry in entries:
+            lines.append(_set_line(entry))
+        lines.append("")
+
     lines.append("save")
     return "\n".join(lines)
