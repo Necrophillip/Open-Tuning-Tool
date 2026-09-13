@@ -102,10 +102,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Apply recommended CLI changes directly to a connected FC over the CLI
   - Schema-validated and grouped by profile scope (`profile`/`rateprofile` selectors)
 
+- 🚀 **Automated Extraction + Auto CLI Dump**
+  - One-click flow: enter MSC → choose a `.BBL` (if fragmented, excludes the "all" file)
+    → eject → reconnect prompt → auto-detect FC → read `dump` over the CLI
+  - Removed the manual CLI step from the wizard (settings are now auto-synced)
+  - "Sync Settings from FC" action for logs loaded from a file
+
+- 📈 **Review Page (Export)**
+  - Step-response plot per axis (roll/pitch/yaw) with overshoot metric
+  - Throttle-vs-noise heatmaps with axis selector
+
+- 🗂️ **Per-FC Sessions + Change Control**
+  - Sessions keyed by flight controller (`~/.fpv_tuner/sessions/<fc_id>/...`)
+  - Full CLI settings + applied changes stored per session
+  - "Revert to this session" generates rollback CLI commands
+
+- 🎯 **PID Suggestions**
+  - Step-response based P/D gain recommendations per axis (schema-clamped)
+
 ### Changed
 - 🔧 Prescription engine now emits modern Betaflight 4.5+ names and validates
   every recommendation against the CLI schema (never suggests an invalid command)
 - 🔧 `format_cli_commands` groups commands by scope and emits `profile`/`rateprofile`
+- 🔧 Wizard flow now has 5 steps (Load Log → Analysis → Diagnosis → Export → Iterate)
 
 ### Fixed
 - 🐛 MSP direction bytes were swapped (`$M<` to FC vs `$M>` from FC), preventing
