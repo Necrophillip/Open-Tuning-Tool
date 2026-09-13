@@ -520,6 +520,58 @@ def _check_voltage_sag(df: pd.DataFrame, cli: Optional[dict] = None) -> list[Fin
     return findings
 
 
+def _check_pid_step_response(df: pd.DataFrame, cli: Optional[dict] = None) -> list[Finding]:
+    """
+    Analyze the step response of each axis and flag suboptimal PID tuning.
+
+    Uses the same step-response fitting as the review page.  Produces a
+    Finding per analysable axis with overshoot / rise-time metrics that the
+    prescription engine consumes to suggest P and D changes.
+    """
+    from fpv_tuner.analysis.summary import compute_step_response_summary
+
+    findings = []
+    for axis in ("roll", "pitch", "yaw"):
+        summary = compute_step_response_summary(df, axis)
+        if summary is None:
+            continue
+
+        overshoot = float(summary.get("overshoot_pct", 0.0) or 0.0)
+        rise_time = summary.get("rise_time_s")
+        name = axis.capitalize()
+
+        if overshoot > 20:
+            severity = Severity.WARNING
+            recommendation = "Reduce P gain and/or increase D gain to damp the response."
+        elif overshoot > 12:
+            severity = Severity.WARNING
+            recommendation = "Slightly reduce P or increase D to reduce overshoot."
+        elif rise_time is not None and rise_time > 0.2:
+            severity = Severity.WARNING
+            recommendation = "Raise P gain to speed up the response."
+        else:
+            severity = Severity.GOOD
+            recommendation = "Step response looks healthy."
+
+        findings.append(Finding(
+            severity=severity,
+            category=Category.PID,
+            title=f"Step response — {name}",
+            explanation=(
+                f"Overshoot {overshoot:.0f}%" +
+                (f", rise time {rise_time * 1000:.0f} ms" if rise_time is not None else "")
+            ),
+            recommendation=recommendation,
+            data={
+                "axis": axis,
+                "axis_name": name,
+                "overshoot_pct": overshoot,
+                "rise_time_s": rise_time,
+            },
+        ))
+    return findings
+
+
 # ── Main entry point ─────────────────────────────────────────────
 
 ALL_RULES = [
@@ -529,6 +581,7 @@ ALL_RULES = [
     _check_frame_resonance,
     _check_throttle_noise_correlation,
     _check_voltage_sag,
+    _check_pid_step_response,
 ]
 
 
