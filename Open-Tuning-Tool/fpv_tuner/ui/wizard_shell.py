@@ -35,7 +35,6 @@ def _has_scroll_area(widget) -> bool:
 
 WIZARD_STEPS = [
     {"title": "Load Log",    "subtitle": "Drop a blackbox log file"},
-    {"title": "CLI Dump",    "subtitle": "Optional: your Betaflight dump"},
     {"title": "Analysis",    "subtitle": "Automatic noise analysis"},
     {"title": "Diagnosis",   "subtitle": "What we found"},
     {"title": "Export",      "subtitle": "Get your new configuration"},
@@ -120,13 +119,12 @@ class WizardShell(QWidget):
 
         # Import pages here to avoid circular imports
         from fpv_tuner.ui.pages.log_page import LogPage
-        from fpv_tuner.ui.pages.cli_page import CliPage
         from fpv_tuner.ui.pages.analysis_page import AnalysisPage
         from fpv_tuner.ui.pages.diagnosis_page import DiagnosisPage
         from fpv_tuner.ui.pages.export_page import ExportPage
         from fpv_tuner.ui.pages.iterate_page import IteratePage
 
-        page_classes = [LogPage, CliPage, AnalysisPage, DiagnosisPage, ExportPage, IteratePage]
+        page_classes = [LogPage, AnalysisPage, DiagnosisPage, ExportPage, IteratePage]
 
         for PageClass in page_classes:
             if PageClass in (LogPage, AnalysisPage, DiagnosisPage, ExportPage):
@@ -138,7 +136,7 @@ class WizardShell(QWidget):
             self.stack.addWidget(page)
 
         # Connect Iterate page's new session signal
-        iterate_page = self._pages[5]  # IteratePage
+        iterate_page = self._pages[-1]  # IteratePage
         iterate_page.new_session_requested.connect(self.reset_wizard)
 
         content_layout.addWidget(self.stack, 1)
@@ -257,11 +255,7 @@ class WizardShell(QWidget):
         else:
             self.next_btn.setText("Next  →")
 
-        # Skip hint for CLI page
-        if self._current_step == 1:  # CLI page
-            self.skip_label.setText("This step is optional — you can skip it")
-        else:
-            self.skip_label.setText("")
+        self.skip_label.setText("")
 
     # ── Public API ────────────────────────────────────────────────
 

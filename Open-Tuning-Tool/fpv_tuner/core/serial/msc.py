@@ -170,6 +170,22 @@ def copy_bbl_files(source_paths: list[str], dest_dir: str) -> list[str]:
     return copied
 
 
+def copy_blackbox_file(source_path: str, dest_dir: str) -> str:
+    """Copy a single blackbox file into ``dest_dir``; return the new path."""
+    return copy_bbl_files([source_path], dest_dir)[0]
+
+
+def filter_blackbox_files(paths: list[str]) -> list[str]:
+    """
+    Remove the "all" combined blackbox file(s) from a list of paths.
+
+    Betaflight boards often produce a ``*_all.bbl`` file that concatenates
+    every arm/disarm session, alongside per-flight fragments.  We exclude
+    any file whose name contains "all" so the user picks a single flight.
+    """
+    return [p for p in paths if "all" not in Path(p).stem.lower()]
+
+
 def eject(mount_path: str) -> bool:
     """
     Best-effort eject of a mounted volume so the FC reboots to firmware.
@@ -260,6 +276,50 @@ def enter_mass_storage(port: str, baudrate: int = 115200) -> None:
         logger.info("FC responsive; requesting mass-storage mode")
         client.reboot_to_mass_storage()
     logger.info("MSP reboot sent; waiting for the FC to re-enumerate as MSC")
+
+
+def enter_and_list_blackbox(
+    port: str,
+    baudrate: int = 115200,
+    mount_timeout: float = 30.0,
+) -> tuple[str, list[str]]:
+    """
+    Enter mass-storage mode and list the blackbox files (excluding "all").
+
+    Returns:
+        ``(mount_point, files)`` where ``files`` are non-"all" ``.bbl`` paths.
+        Falls back to the full file list if the volume only contains the
+        combined "all" file.
+    """
+    before = find_mount_points()
+    logger.info("Mount points before: %s", before)
+    enter_mass_storage(port, baudrate=baudrate)
+
+    new_mounts = wait_for_mount(timeout=mount_timeout, before=before)
+    logger.info("New mount points: %s", new_mounts)
+    if not new_mounts:
+        raise MassStorageError(
+            "No new volume appeared after entering mass-storage mode. "
+            "Try again, or check the USB connection."
+        )
+
+    mount_point = new_mounts[0]
+    raw = locate_bbl_files_with_retry(mount_point, timeout=8.0)
+    # Prefer a mount that has per-flight files (not just the "all" file).
+    for mp in new_mounts:
+        mp_raw = locate_bbl_files_with_retry(mp, timeout=8.0)
+        if filter_blackbox_files(mp_raw):
+            mount_point = mp
+            raw = mp_raw
+            break
+
+    filtered = filter_blackbox_files(raw)
+    if not filtered:
+        logger.info("Only 'all' blackbox file(s) present; using them as fallback")
+        filtered = raw
+
+    logger.info("Blackbox files available: %s", filtered)
+    return mount_point, filtered
 
 
 def extract_bbl(

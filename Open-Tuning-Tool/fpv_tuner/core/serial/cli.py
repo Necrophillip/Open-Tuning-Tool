@@ -92,14 +92,18 @@ class CliSession:
         """Enter CLI mode and return the banner text."""
         logger.info("Entering CLI mode on %s", self.conn.port)
         self.conn.flush()
+        # Allow the FC a moment to settle after (re)opening the port — an
+        # immediately preceding MSP session can leave it briefly unready.
+        time.sleep(0.3)
         self.conn.write(b"#")
         banner = None
-        for _ in range(2):
+        for attempt in range(3):
             try:
                 banner = self._read_to_prompt(self.enter_timeout)
                 break
             except CliSessionError:
-                logger.warning("No CLI prompt after '#'; retrying")
+                logger.warning("No CLI prompt after '#' (attempt %d); retrying", attempt + 1)
+                time.sleep(0.5)
                 self.conn.write(b"#")  # some firmwares need a second '#'
         else:
             raise CliSessionError("Could not enter CLI mode — is the port connected to a Betaflight FC?")
@@ -268,3 +272,39 @@ def write_changes_to_fc(
 def _scope(schema: CliSchema, name: str) -> str:
     var = schema.get(name)
     return var.scope if var is not None else "master"
+
+
+def read_dump(
+    port: str,
+    baudrate: int = 115200,
+    enter_timeout: float = 3.0,
+    dump_timeout: float = 15.0,
+    retries: int = 2,
+):
+    """
+    Connect to the FC, enter the CLI, and read the full ``dump`` output.
+
+    Returns a ``CliDumpData`` (parsed settings + firmware version), reusing
+    the parser in ``fpv_tuner.core.cli_dump``.  Retries once or twice if the
+    dump comes back empty (a freshly-rebooted FC can drop the first read).
+    """
+    from fpv_tuner.core.cli_dump import parse_dump
+
+    data = None
+    for attempt in range(retries + 1):
+        logger.info("read_dump: port=%s (attempt %d)", port, attempt + 1)
+        with SerialConnection(port, baudrate=baudrate) as conn:
+            cli = CliSession(conn, enter_timeout=enter_timeout, command_timeout=dump_timeout)
+            cli.enter()
+            try:
+                raw = cli.dump()
+            finally:
+                cli.exit()
+        data = parse_dump(raw)
+        if data.settings:
+            break
+        logger.warning("read_dump: empty/truncated dump (attempt %d); retrying", attempt + 1)
+        time.sleep(1.0)
+
+    logger.info("read_dump: parsed %d settings, version=%s", len(data.settings), data.version)
+    return data

@@ -12,8 +12,11 @@ from PyQt6.QtCore import Qt
 from fpv_tuner.ui.pages.base_page import WizardPage
 from fpv_tuner.ui.widgets.dropzone import DropZone
 from fpv_tuner.ui.widgets.serial_port_dialog import SerialPortDialog
-from fpv_tuner.ui.app_state import AppState, LogSession
+from fpv_tuner.ui.widgets.bbl_select_dialog import BblSelectDialog
+from fpv_tuner.ui.extraction_flow import ExtractionFlow
+from fpv_tuner.ui.app_state import AppState, LogSession, CliDump
 from fpv_tuner.ui.theme import Colors, Spacing, Typography
+from fpv_tuner.ui.toasts import ToastManager
 
 
 class LogPage(WizardPage):
@@ -23,7 +26,9 @@ class LogPage(WizardPage):
     def __init__(self, state: AppState, job_runner, parent=None):
         self._jobs = job_runner
         self._current_job = None
+        self._extract_flow = None
         super().__init__(state, parent)
+        self.toasts = ToastManager(self)
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
@@ -53,8 +58,16 @@ class LogPage(WizardPage):
             "Connect the FC via USB and pull its blackbox log via mass-storage mode."
         )
         self.extract_btn.clicked.connect(self._on_extract_clicked)
-        extract_row.addStretch()
         extract_row.addWidget(self.extract_btn)
+
+        self.sync_btn = QPushButton("🔗  Sync Settings from FC")
+        self.sync_btn.setProperty("variant", "ghost")
+        self.sync_btn.setToolTip(
+            "Read the current CLI dump from a connected flight controller."
+        )
+        self.sync_btn.clicked.connect(self._on_sync_clicked)
+        extract_row.addWidget(self.sync_btn)
+
         extract_row.addStretch()
         layout.addLayout(extract_row)
 
@@ -146,7 +159,7 @@ class LogPage(WizardPage):
         self.dropzone.set_enabled(True)
         self.validity_changed.emit()
 
-    # ── Extract from FC (mass-storage mode) ───────────────────────
+    # ── Extract from FC (mass-storage mode + auto CLI dump) ───────
 
     def _on_extract_clicked(self):
         port = SerialPortDialog.get_port(self, "Extract Blackbox from FC")
@@ -154,37 +167,54 @@ class LogPage(WizardPage):
             return
 
         self.extract_btn.setEnabled(False)
+        self.sync_btn.setEnabled(False)
         self.progress.show()
         self.info_card.hide()
 
-        dest_dir = os.path.expanduser("~/Downloads")
+        flow = ExtractionFlow(self._jobs, self)
+        flow.progress.connect(lambda msg: self._set_extract_status(f"⏳  {msg}"))
+        flow.files_found.connect(self._on_bbl_files_found)
+        flow.reconnect_required.connect(self._on_reconnect_required)
+        flow.finished.connect(self._on_extract_finished)
+        flow.failed.connect(self._on_extract_error)
+        self._extract_flow = flow
 
-        def _run(job):
-            from fpv_tuner.core.serial.msc import extract_bbl
-            from fpv_tuner.blackbox.loader import load_log
+        flow.start(port, os.path.expanduser("~/Downloads"))
 
-            job.report_progress(20, "Entering mass-storage mode...")
-            result = extract_bbl(port, dest_dir)
-            job.report_progress(80, "Loading extracted log...")
-            df, pids, error = load_log(result["bbl_files"][0], merge_all_segments=True)
-            if error:
-                raise RuntimeError(error)
-            return result["bbl_files"][0], df, pids
+    def _on_bbl_files_found(self, files):
+        chosen = BblSelectDialog.choose(files, self)
+        if chosen:
+            self._extract_flow.select(chosen)
+        else:
+            self._extract_flow = None
+            self._reset_extract_buttons()
 
-        self._jobs.run(
-            fn=_run,
-            on_result=self._on_extract_success,
-            on_error=self._on_extract_error,
-            on_finished=self._on_extract_finished,
+    def _on_reconnect_required(self):
+        self.toasts.warning(
+            "Reconnect the flight controller's USB cable to continue.", 6000
         )
 
-    def _on_extract_success(self, result):
-        file_path, df, pids = result
-        self._on_load_success(file_path, (df, pids))
+    def _on_extract_finished(self, bbl_path, cli_data):
+        # Store the auto-extracted CLI dump.
+        if cli_data is not None:
+            self.state.set_cli(CliDump(
+                raw_text=cli_data.raw_text,
+                version=cli_data.version,
+                settings=cli_data.settings,
+                file_path="",
+            ))
+            self.toasts.success(
+                f"CLI dump loaded — BF {cli_data.version or '?'} "
+                f"({len(cli_data.settings)} settings)"
+            )
+        self._reset_extract_buttons()
+        # Load the extracted blackbox log through the normal pipeline.
+        self._on_files_dropped([bbl_path])
 
     def _on_extract_error(self, error_msg: str):
+        self._reset_extract_buttons()
         self.info_card.setText(
-            f"❌  Extraction failed: {error_msg.splitlines()[-1] if error_msg else 'Unknown error'}"
+            f"❌  Extraction failed: {error_msg}"
         )
         self.info_card.setStyleSheet(f"""
             background-color: {Colors.DANGER_MUTED};
@@ -196,9 +226,63 @@ class LogPage(WizardPage):
         """)
         self.info_card.show()
 
-    def _on_extract_finished(self):
+    def _set_extract_status(self, text: str):
+        self.info_card.setText(text)
+        self.info_card.setStyleSheet(f"""
+            background-color: {Colors.ACCENT_MUTED};
+            color: {Colors.ACCENT};
+            border: 1px solid {Colors.ACCENT};
+            border-radius: 10px;
+            padding: {Spacing.MD}px;
+            font-size: {Typography.SIZE_BODY}px;
+        """)
+        self.info_card.show()
+
+    def _reset_extract_buttons(self):
         self.extract_btn.setEnabled(True)
+        self.sync_btn.setEnabled(True)
         self.progress.hide()
+
+    # ── Sync CLI dump from FC ─────────────────────────────────────
+
+    def _on_sync_clicked(self):
+        port = SerialPortDialog.get_port(self, "Sync Settings from FC")
+        if not port:
+            return
+
+        self.sync_btn.setEnabled(False)
+        self.toasts.info("Reading CLI dump from the flight controller...")
+
+        def _run(job):
+            from fpv_tuner.core.serial.cli import read_dump
+            job.report_progress(30, "Connecting to FC...")
+            return read_dump(port)
+
+        self._jobs.run(
+            fn=_run,
+            on_result=self._on_sync_done,
+            on_error=lambda e: self._on_sync_error(e, None),
+        )
+
+    def _on_sync_done(self, cli_data):
+        self.sync_btn.setEnabled(True)
+        if cli_data.errors:
+            self.toasts.error("; ".join(cli_data.errors))
+            return
+        self.state.set_cli(CliDump(
+            raw_text=cli_data.raw_text,
+            version=cli_data.version,
+            settings=cli_data.settings,
+            file_path="",
+        ))
+        self.toasts.success(
+            f"CLI dump loaded — BF {cli_data.version or '?'} "
+            f"({len(cli_data.settings)} settings)"
+        )
+
+    def _on_sync_error(self, error_msg, _):
+        self.sync_btn.setEnabled(True)
+        self.toasts.error(error_msg.splitlines()[-1] if error_msg else "Sync failed")
 
     # ── Contract ──────────────────────────────────────────────────
 

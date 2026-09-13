@@ -116,6 +116,12 @@ class MainWindow(QMainWindow):
         )
         self.write_action.triggered.connect(self.write_changes_to_fc)
 
+        self.sync_action = QAction("🔗 &Sync Settings from FC...", self)
+        self.sync_action.setStatusTip(
+            "Read the current CLI dump from a connected flight controller"
+        )
+        self.sync_action.triggered.connect(self.sync_settings_from_fc)
+
         clear_icon = style.standardIcon(QStyle.StandardPixmap.SP_TrashIcon) if style else QAction().icon()
         self.clear_action = QAction(clear_icon, "&Clear All Logs", self)
         self.clear_action.setStatusTip("Remove all loaded logs")
@@ -155,6 +161,7 @@ class MainWindow(QMainWindow):
             file_menu.addAction(self.extract_action)
             file_menu.addSeparator()
             file_menu.addAction(self.write_action)
+            file_menu.addAction(self.sync_action)
             file_menu.addSeparator()
             file_menu.addAction(self.clear_action)
             file_menu.addSeparator()
@@ -222,35 +229,63 @@ class MainWindow(QMainWindow):
         merge = self.merge_segments_action.isChecked()
         self.extract_action.setEnabled(False)
         status_bar = self.statusBar()
+
+        from fpv_tuner.ui.extraction_flow import ExtractionFlow
+        from fpv_tuner.ui.widgets.bbl_select_dialog import BblSelectDialog
+        from fpv_tuner.ui.app_state import CliDump
+        from fpv_tuner.blackbox.loader import load_log
+
+        self._extract_flow = ExtractionFlow(self.jobs, self)
+        flow = self._extract_flow
+        flow.progress.connect(lambda m: self._set_status(m))
+        flow.files_found.connect(lambda files: self._choose_bbl(flow, files))
+        flow.reconnect_required.connect(
+            lambda: self._toast_reconnect()
+        )
+        flow.finished.connect(lambda bbl, cli: self._extract_finished(bbl, cli, merge))
+        flow.failed.connect(self._extract_failed)
+        flow.start(port, dest_dir)
+
+    def _choose_bbl(self, flow, files):
+        from fpv_tuner.ui.widgets.bbl_select_dialog import BblSelectDialog
+        chosen = BblSelectDialog.choose(files, self)
+        if chosen:
+            flow.select(chosen)
+        else:
+            self.extract_action.setEnabled(True)
+
+    def _toast_reconnect(self):
+        QMessageBox.information(
+            self, "Reconnect",
+            "The flight controller has been ejected. "
+            "Reconnect its USB cable to continue reading the CLI dump.",
+        )
+
+    def _extract_finished(self, bbl_path, cli_data, merge):
+        from fpv_tuner.ui.app_state import CliDump
+        from fpv_tuner.blackbox.loader import load_log
+        self.extract_action.setEnabled(True)
+        if cli_data is not None:
+            self.app_state.set_cli(CliDump(
+                raw_text=cli_data.raw_text,
+                version=cli_data.version,
+                settings=cli_data.settings,
+                file_path="",
+            ))
+        self._set_status("Loading extracted log...")
+        df, pids, error = load_log(bbl_path, merge_all_segments=merge)
+        self.on_load_finished(bbl_path, df, pids, error)
+        self.on_all_loads_finished()
+
+    def _extract_failed(self, message):
+        self.extract_action.setEnabled(True)
+        QMessageBox.critical(self, "Extraction Failed", message)
+        self._set_status("Ready")
+
+    def _set_status(self, message):
+        status_bar = self.statusBar()
         if status_bar is not None:
-            status_bar.showMessage("Entering mass-storage mode on the FC...")
-
-        def _run(job):
-            from fpv_tuner.core.serial.msc import extract_bbl
-            from fpv_tuner.blackbox.loader import load_log
-
-            job.report_progress(20, "Entering mass-storage mode...")
-            result = extract_bbl(port, dest_dir)
-            job.report_progress(80, "Loading extracted log...")
-            df, pids, error = load_log(result["bbl_files"][0], merge_all_segments=merge)
-            return result["bbl_files"][0], df, pids, error
-
-        def _done(result):
-            file_path, df, pids, error = result
-            self.extract_action.setEnabled(True)
-            self.on_load_finished(file_path, df, pids, error)
-            self.on_all_loads_finished()
-
-        def _error(err):
-            self.extract_action.setEnabled(True)
-            QMessageBox.critical(
-                self, "Extraction Failed",
-                f"Could not extract the blackbox log:\n\n{err.splitlines()[-1] if err else 'Unknown error'}",
-            )
-            if status_bar is not None:
-                status_bar.showMessage("Ready", 3000)
-
-        self.jobs.run(fn=_run, on_result=_done, on_error=_error)
+            status_bar.showMessage(message)
 
     def write_changes_to_fc(self):
         analysis = self.app_state.analysis
@@ -300,6 +335,49 @@ class MainWindow(QMainWindow):
             if status_bar is not None:
                 status_bar.showMessage("Ready", 3000)
             QMessageBox.critical(self, "Write Failed", err.splitlines()[-1] if err else "Unknown error")
+
+        self.jobs.run(fn=_run, on_result=_done, on_error=_error)
+
+    def sync_settings_from_fc(self):
+        port = SerialPortDialog.get_port(self, "Sync Settings from FC")
+        if not port:
+            return
+
+        self.sync_action.setEnabled(False)
+        status_bar = self.statusBar()
+        if status_bar is not None:
+            status_bar.showMessage("Reading CLI dump from the FC...")
+
+        def _run(job):
+            from fpv_tuner.core.serial.cli import read_dump
+            job.report_progress(30, "Connecting to FC...")
+            return read_dump(port)
+
+        def _done(cli_data):
+            self.sync_action.setEnabled(True)
+            if status_bar is not None:
+                status_bar.showMessage("Ready", 3000)
+            from fpv_tuner.ui.app_state import CliDump
+            if cli_data.errors:
+                QMessageBox.warning(self, "Sync Failed", "\n".join(cli_data.errors))
+                return
+            self.app_state.set_cli(CliDump(
+                raw_text=cli_data.raw_text,
+                version=cli_data.version,
+                settings=cli_data.settings,
+                file_path="",
+            ))
+            QMessageBox.information(
+                self, "Sync Complete",
+                f"Loaded CLI dump — BF {cli_data.version or '?'} "
+                f"({len(cli_data.settings)} settings)",
+            )
+
+        def _error(err):
+            self.sync_action.setEnabled(True)
+            if status_bar is not None:
+                status_bar.showMessage("Ready", 3000)
+            QMessageBox.critical(self, "Sync Failed", err.splitlines()[-1] if err else "Unknown error")
 
         self.jobs.run(fn=_run, on_result=_done, on_error=_error)
 
