@@ -129,7 +129,7 @@ class WizardShell(QWidget):
         page_classes = [LogPage, CliPage, AnalysisPage, DiagnosisPage, ExportPage, IteratePage]
 
         for PageClass in page_classes:
-            if PageClass in (LogPage, AnalysisPage, DiagnosisPage):
+            if PageClass in (LogPage, AnalysisPage, DiagnosisPage, ExportPage):
                 page = PageClass(self.state, self.jobs)
             else:
                 page = PageClass(self.state)

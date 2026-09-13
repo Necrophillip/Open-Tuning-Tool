@@ -110,6 +110,12 @@ class MainWindow(QMainWindow):
         )
         self.extract_action.triggered.connect(self.extract_from_fc)
 
+        self.write_action = QAction("📝 &Write Changes to FC...", self)
+        self.write_action.setStatusTip(
+            "Connect the FC via USB and apply the recommended CLI changes"
+        )
+        self.write_action.triggered.connect(self.write_changes_to_fc)
+
         clear_icon = style.standardIcon(QStyle.StandardPixmap.SP_TrashIcon) if style else QAction().icon()
         self.clear_action = QAction(clear_icon, "&Clear All Logs", self)
         self.clear_action.setStatusTip("Remove all loaded logs")
@@ -147,6 +153,9 @@ class MainWindow(QMainWindow):
         if file_menu:
             file_menu.addAction(self.open_action)
             file_menu.addAction(self.extract_action)
+            file_menu.addSeparator()
+            file_menu.addAction(self.write_action)
+            file_menu.addSeparator()
             file_menu.addAction(self.clear_action)
             file_menu.addSeparator()
             file_menu.addAction(self.merge_segments_action)
@@ -240,6 +249,57 @@ class MainWindow(QMainWindow):
             )
             if status_bar is not None:
                 status_bar.showMessage("Ready", 3000)
+
+        self.jobs.run(fn=_run, on_result=_done, on_error=_error)
+
+    def write_changes_to_fc(self):
+        analysis = self.app_state.analysis
+        diff = analysis.cli_diff if analysis is not None else None
+        if diff is None or not diff.has_changes:
+            QMessageBox.information(
+                self, "No Changes",
+                "Run the wizard analysis first to generate recommended changes.",
+            )
+            return
+
+        port = SerialPortDialog.get_port(self, "Write Changes to FC")
+        if not port:
+            return
+
+        changes = [e for e in diff.entries if e.kind in ("changed", "added")]
+        version = self.app_state.cli.version if self.app_state.has_cli else None
+
+        self.write_action.setEnabled(False)
+        status_bar = self.statusBar()
+        if status_bar is not None:
+            status_bar.showMessage("Writing changes to the FC...")
+
+        def _run(job):
+            from fpv_tuner.core.serial import write_changes_to_fc
+            from fpv_tuner.core.cli import get_schema
+            job.report_progress(30, "Connecting to FC...")
+            return write_changes_to_fc(port, changes, schema=get_schema(version))
+
+        def _done(result):
+            self.write_action.setEnabled(True)
+            if status_bar is not None:
+                status_bar.showMessage("Ready", 3000)
+            if result.success:
+                QMessageBox.information(
+                    self, "Success",
+                    f"Applied {result.n_applied} change(s) to the flight controller.",
+                )
+            else:
+                QMessageBox.warning(
+                    self, "Write Incomplete",
+                    "\n".join(result.errors or ["Unknown error"]),
+                )
+
+        def _error(err):
+            self.write_action.setEnabled(True)
+            if status_bar is not None:
+                status_bar.showMessage("Ready", 3000)
+            QMessageBox.critical(self, "Write Failed", err.splitlines()[-1] if err else "Unknown error")
 
         self.jobs.run(fn=_run, on_result=_done, on_error=_error)
 

@@ -14,12 +14,19 @@ from PyQt6.QtCore import Qt
 
 from fpv_tuner.ui.pages.base_page import WizardPage
 from fpv_tuner.ui.app_state import AppState
+from fpv_tuner.ui.widgets.serial_port_dialog import SerialPortDialog
 from fpv_tuner.ui.theme import Colors, Spacing, Radius, Typography
 
 
 class ExportPage(WizardPage):
     STEP_TITLE = "Export"
     STEP_SUBTITLE = "Get your new configuration"
+
+    def __init__(self, state: AppState, job_runner=None, parent=None):
+        self._jobs = job_runner
+        self._diff = None
+        self._schema = None
+        super().__init__(state, parent)
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
@@ -78,6 +85,14 @@ class ExportPage(WizardPage):
         self.save_btn.setProperty("variant", "ghost")
         self.save_btn.clicked.connect(self._save_to_file)
         btn_layout.addWidget(self.save_btn)
+
+        self.write_btn = QPushButton("🛰  Write to FC")
+        self.write_btn.setProperty("variant", "primary")
+        self.write_btn.setToolTip(
+            "Connect the FC via USB and apply these CLI changes directly."
+        )
+        self.write_btn.clicked.connect(self._write_to_fc)
+        btn_layout.addWidget(self.write_btn)
 
         btn_layout.addStretch()
         layout.addLayout(btn_layout)
@@ -141,6 +156,9 @@ class ExportPage(WizardPage):
         cli_version = self.state.cli.version if self.state.has_cli else None
         schema = get_schema(cli_version)
 
+        self._diff = diff
+        self._schema = schema
+
         if not diff.has_changes:
             self.changes_label.setText(
                 "✅  No critical changes needed — your quad looks good! "
@@ -182,3 +200,67 @@ class ExportPage(WizardPage):
             self.save_btn.setText("✅  Saved!")
             from PyQt6.QtCore import QTimer
             QTimer.singleShot(2000, lambda: self.save_btn.setText("💾  Save to File"))
+
+    # ── Write to FC ───────────────────────────────────────────────
+
+    def _write_to_fc(self):
+        if self._diff is None or not self._diff.has_changes:
+            QMessageBox.information(
+                self, "No Changes",
+                "There are no recommended changes to write yet.",
+            )
+            return
+
+        port = SerialPortDialog.get_port(self, "Write Changes to FC")
+        if not port:
+            return
+
+        if self._jobs is None:
+            QMessageBox.warning(self, "Not Available", "Background runner unavailable.")
+            return
+
+        # Only write changed/added entries (skip "removed" placeholders).
+        changes = [
+            e for e in self._diff.entries if e.kind in ("changed", "added")
+        ]
+        schema = self._schema
+
+        self.write_btn.setEnabled(False)
+        self.write_btn.setText("⏳  Writing...")
+
+        def _run(job):
+            from fpv_tuner.core.serial import write_changes_to_fc
+            job.report_progress(30, "Connecting to FC...")
+            return write_changes_to_fc(port, changes, schema=schema)
+
+        self._jobs.run(
+            fn=_run,
+            on_result=self._on_write_done,
+            on_error=self._on_write_error,
+        )
+
+    def _on_write_done(self, result):
+        self._reset_write_btn()
+        if result.success:
+            QMessageBox.information(
+                self, "Success",
+                f"Applied {result.n_applied} change(s) to the flight controller.\n"
+                "The FC will save and reboot.",
+            )
+        else:
+            QMessageBox.warning(
+                self, "Write Incomplete",
+                "Some changes could not be applied:\n\n"
+                + "\n".join(result.errors or ["Unknown error"]),
+            )
+
+    def _on_write_error(self, error_msg):
+        self._reset_write_btn()
+        QMessageBox.critical(
+            self, "Write Failed",
+            f"Could not write to the FC:\n\n{error_msg.splitlines()[-1] if error_msg else 'Unknown error'}",
+        )
+
+    def _reset_write_btn(self):
+        self.write_btn.setEnabled(True)
+        self.write_btn.setText("🛰  Write to FC")
