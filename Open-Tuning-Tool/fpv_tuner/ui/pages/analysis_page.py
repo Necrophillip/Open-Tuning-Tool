@@ -322,6 +322,14 @@ class AnalysisPage(WizardPage):
                 summary_parts.append("No issues found")
 
             # Save session
+            from fpv_tuner.core.session_history import derive_fc_id
+            cli = self.state.cli if self.state.has_cli else None
+            fc_id = derive_fc_id(
+                board=cli.board if cli else "",
+                target=cli.target if cli else "",
+                board_name=cli.board_name if cli else "",
+                manufacturer_id=cli.manufacturer_id if cli else "",
+            )
             snap = build_snapshot(
                 log_file=self.state.log.file_path,
                 findings=engine_findings,
@@ -329,6 +337,8 @@ class AnalysisPage(WizardPage):
                 cli_version=self.state.cli.version if self.state.has_cli else "",
                 n_rows=len(df),
                 duration_s=self.state.log.duration_s,
+                fc_id=fc_id,
+                cli_settings=cli.settings if cli else None,
             )
             session_id = save_session(snap)
 

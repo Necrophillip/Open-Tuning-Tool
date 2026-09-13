@@ -1,15 +1,17 @@
 """
-Session History — track tuning iterations over time.
+Session History — track tuning iterations per flight controller.
 
 Pure Python, no Qt.  Persists each tuning session (log analysis +
-diagnosis + prescription) to a local JSON store, so users can
-compare iterations and see if their changes actually helped.
+diagnosis + prescription) to a local JSON store, keyed by flight
+controller, so users can compare iterations, revert changes, and see
+whether their tuning actually helped.
 
-Storage: ~/.fpv_tuner/sessions/
-Each session is a directory with metadata + findings + prescription.
+Storage: ~/.fpv_tuner/sessions/<fc_id>/<session_id>/snapshot.json
+(falls back to a flat layout for legacy sessions without an fc_id).
 """
 import json
 import os
+import re
 import time
 import hashlib
 from dataclasses import dataclass, field, asdict
@@ -27,6 +29,7 @@ class SessionSnapshot:
     """Immutable record of one tuning iteration."""
     session_id: str = ""
     timestamp: float = 0.0
+    fc_id: str = ""                  # flight-controller identity (see derive_fc_id)
     log_file: str = ""               # original .bbl path
     cli_version: str = ""            # e.g. "4.5.0"
     n_rows: int = 0
@@ -44,6 +47,9 @@ class SessionSnapshot:
     # Prescription
     n_changes: int = 0
     changes_summary: list = field(default_factory=list)   # ["gyro_lowpass_hz: 250→150", ...]
+    # Change control
+    cli_settings: dict = field(default_factory=dict)     # full settings snapshot (pre-change)
+    applied_changes: list = field(default_factory=list)  # [{"setting","old","new"}, ...]
     # User notes
     user_note: str = ""
 
@@ -75,11 +81,40 @@ def _generate_id(log_path: str, timestamp: float) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()[:12]
 
 
+def derive_fc_id(board: str = "", target: str = "", board_name: str = "",
+                 manufacturer_id: str = "", serial: str = "") -> str:
+    """
+    Derive a stable, sanitized flight-controller identity.
+
+    Prefers the specific ``board_name`` + ``manufacturer_id``; falls back to
+    ``board`` + ``target``; appends a USB ``serial`` when available.  Returns
+    a lowercase, filesystem-safe token (or "unknown").
+    """
+    parts = []
+    if board_name and manufacturer_id:
+        parts = [manufacturer_id, board_name]
+    elif board and target:
+        parts = [board, target]
+    elif board:
+        parts = [board]
+    if serial:
+        parts.append(serial)
+    if not parts:
+        return "unknown"
+    raw = "-".join(parts)
+    return re.sub(r"[^a-z0-9]+", "-", raw.lower()).strip("-") or "unknown"
+
+
 # ── Public API ────────────────────────────────────────────────────
+
+def _snapshot_dir_for(fc_id: str, session_id: str) -> Path:
+    base = _get_storage_dir()
+    return base / (fc_id or "unknown") / session_id
+
 
 def save_session(snapshot: SessionSnapshot) -> str:
     """
-    Persist a session snapshot to disk.
+    Persist a session snapshot to disk (under its fc_id).
 
     Returns the session ID.
     """
@@ -88,7 +123,7 @@ def save_session(snapshot: SessionSnapshot) -> str:
     if not snapshot.timestamp:
         snapshot.timestamp = time.time()
 
-    storage = _get_storage_dir() / snapshot.session_id
+    storage = _snapshot_dir_for(snapshot.fc_id, snapshot.session_id)
     storage.mkdir(parents=True, exist_ok=True)
 
     with open(storage / "snapshot.json", "w") as fh:
@@ -97,38 +132,87 @@ def save_session(snapshot: SessionSnapshot) -> str:
     return snapshot.session_id
 
 
-def load_session(session_id: str) -> Optional[SessionSnapshot]:
-    """Load a session by ID."""
-    path = _get_storage_dir() / session_id / "snapshot.json"
-    if not path.exists():
+def load_session(session_id: str, fc_id: str = "") -> Optional[SessionSnapshot]:
+    """Load a session by ID (optionally scoped to an fc_id)."""
+    if fc_id:
+        path = _snapshot_dir_for(fc_id, session_id) / "snapshot.json"
+        if path.exists():
+            with open(path) as fh:
+                return SessionSnapshot(**json.load(fh))
         return None
-    with open(path) as fh:
-        data = json.load(fh)
-    return SessionSnapshot(**data)
+    # Search all fc_id dirs (and legacy flat layout).
+    for child in _get_storage_dir().iterdir():
+        snap_file = child / "snapshot.json"
+        if snap_file.exists():
+            try:
+                data = json.loads(snap_file.read_text())
+            except (json.JSONDecodeError, OSError):
+                continue
+            if data.get("session_id") == session_id:
+                return SessionSnapshot(**data)
+        elif child.is_dir():
+            found = load_session(session_id, fc_id=child.name)
+            if found:
+                return found
+    return None
 
 
-def list_sessions(limit: int = 50) -> list[SessionSnapshot]:
-    """List recent sessions, newest first."""
+def _read_snapshot(snap_file: Path) -> Optional[SessionSnapshot]:
+    try:
+        data = json.loads(snap_file.read_text())
+        return SessionSnapshot(**data)
+    except (json.JSONDecodeError, TypeError, OSError):
+        return None
+
+
+def list_sessions(limit: int = 50, fc_id: Optional[str] = None) -> list[SessionSnapshot]:
+    """
+    List recent sessions, newest first.
+
+    With ``fc_id``, only that flight controller's sessions are returned.
+    """
     storage = _get_storage_dir()
     sessions = []
-    for child in storage.iterdir():
-        snap_file = child / "snapshot.json"
-        if not snap_file.exists():
-            continue
-        try:
-            with open(snap_file) as fh:
-                data = json.load(fh)
-            sessions.append(SessionSnapshot(**data))
-        except (json.JSONDecodeError, TypeError):
-            continue
+
+    def _collect(directory: Path, scope: Optional[str]):
+        for child in directory.iterdir():
+            snap_file = child / "snapshot.json"
+            if snap_file.exists():
+                snap = _read_snapshot(snap_file)
+                if snap and (scope is None or snap.fc_id == scope):
+                    sessions.append(snap)
+            elif child.is_dir() and scope is None:
+                _collect(child, scope)
+
+    if fc_id:
+        target = storage / fc_id
+        if target.exists():
+            _collect(target, fc_id)
+    else:
+        _collect(storage, None)
+
     sessions.sort(key=lambda s: s.timestamp, reverse=True)
     return sessions[:limit]
 
 
-def delete_session(session_id: str) -> bool:
+def list_sessions_by_fc(fc_id: str, limit: int = 50) -> list[SessionSnapshot]:
+    """List recent sessions for one flight controller."""
+    return list_sessions(limit=limit, fc_id=fc_id)
+
+
+def latest_session_for_fc(fc_id: str) -> Optional[SessionSnapshot]:
+    """Return the most recent session for a flight controller."""
+    sessions = list_sessions_by_fc(fc_id, limit=1)
+    return sessions[0] if sessions else None
+
+
+def delete_session(session_id: str, fc_id: str = "") -> bool:
     """Delete a session directory."""
     import shutil
-    path = _get_storage_dir() / session_id
+    if fc_id:
+        path = _snapshot_dir_for(fc_id, session_id)
+    else:
+        path = _get_storage_dir() / session_id
     if path.exists():
         shutil.rmtree(path)
         return True
@@ -145,19 +229,24 @@ def build_snapshot(
     n_rows: int = 0,
     duration_s: float = 0.0,
     user_note: str = "",
+    fc_id: str = "",
+    cli_settings: Optional[dict] = None,
 ) -> SessionSnapshot:
     """
     Build a SessionSnapshot from current analysis state.
 
-    Extracts key metrics from findings for quick comparison.
+    Extracts key metrics from findings for quick comparison.  ``fc_id``
+    and ``cli_settings`` enable per-FC change control / reversion.
     """
     snap = SessionSnapshot(
         timestamp=time.time(),
+        fc_id=fc_id,
         log_file=log_file,
         cli_version=cli_version,
         n_rows=n_rows,
         duration_s=duration_s,
         user_note=user_note,
+        cli_settings=dict(cli_settings or {}),
     )
 
     # Count by severity
@@ -187,8 +276,36 @@ def build_snapshot(
             f"{c.setting}: {c.old_value}→{c.new_value}"
             for c in prescription.changes
         ]
+        snap.applied_changes = [
+            {"setting": c.setting, "old": c.old_value, "new": c.new_value}
+            for c in prescription.changes
+        ]
 
     return snap
+
+
+def build_revert_commands(snapshot: SessionSnapshot) -> str:
+    """
+    Generate CLI commands to revert the changes recorded in a snapshot.
+
+    Reverts by restoring each setting's ``old`` value (only for settings
+    where the new value differs), ending with ``save``.
+    """
+    lines = [f"# Revert session {snapshot.session_id}", ""]
+    reverted = []
+    for change in snapshot.applied_changes:
+        setting = change.get("setting", "")
+        old = change.get("old", "")
+        new = change.get("new", "")
+        if not setting or old == "" or old == new:
+            continue
+        lines.append(f"set {setting} = {old}")
+        reverted.append(setting)
+    if not reverted:
+        lines.append("# Nothing to revert")
+    else:
+        lines.append("save")
+    return "\n".join(lines)
 
 
 # ── Comparison ────────────────────────────────────────────────────

@@ -33,6 +33,23 @@ class CliDump:
     version: str = ""               # e.g. "4.5.0"
     settings: dict = field(default_factory=dict)  # name -> value
     file_path: str = ""
+    board: str = ""                 # e.g. "STM32F405"
+    target: str = ""                # e.g. "F405"
+    board_name: str = ""            # e.g. "SPEEDYBEEF405AIO"
+    manufacturer_id: str = ""       # e.g. "SPBE"
+
+
+def make_cli_dump(data) -> CliDump:
+    """Build a CliDump from a ``CliDumpData`` (core.cli_dump)."""
+    return CliDump(
+        raw_text=data.raw_text,
+        version=data.version,
+        settings=data.settings,
+        board=getattr(data, "board", ""),
+        target=getattr(data, "target", ""),
+        board_name=getattr(data, "board_name", ""),
+        manufacturer_id=getattr(data, "manufacturer_id", ""),
+    )
 
 
 @dataclass

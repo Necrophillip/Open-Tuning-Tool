@@ -21,6 +21,8 @@ class CliDumpData:
     version: str = ""                       # e.g. "4.5.0"
     board: str = ""                         # e.g. "STM32F405"
     target: str = ""                        # e.g. "S405"
+    board_name: str = ""                    # e.g. "SPEEDYBEEF405AIO"
+    manufacturer_id: str = ""               # e.g. "SPBE"
     settings: dict = field(default_factory=dict)   # set name -> value (str)
     profiles: list = field(default_factory=list)   # per-profile set blocks
     errors: list = field(default_factory=list)
@@ -32,6 +34,8 @@ _VERSION_RE = re.compile(
     r"#\s*Betaflight\s*/\s*(\S+)\s*\((\S+)\)\s*([\d.]+)", re.IGNORECASE
 )
 _SET_RE = re.compile(r"^set\s+(\S+)\s*=\s*(.*)$", re.IGNORECASE)
+_BOARD_NAME_RE = re.compile(r"^board_name\s+(\S+)", re.IGNORECASE)
+_MANUFACTURER_RE = re.compile(r"^manufacturer_id\s+(\S+)", re.IGNORECASE)
 
 
 def parse_dump(text: str) -> CliDumpData:
@@ -66,6 +70,14 @@ def parse_dump(text: str) -> CliDumpData:
             name = m.group(1).lower()
             value = m.group(2).strip()
             data.settings[name] = value
+            continue
+        m = _BOARD_NAME_RE.match(line)
+        if m:
+            data.board_name = m.group(1)
+            continue
+        m = _MANUFACTURER_RE.match(line)
+        if m:
+            data.manufacturer_id = m.group(1)
 
     if not data.settings:
         data.errors.append("No `set` commands found in the dump.")

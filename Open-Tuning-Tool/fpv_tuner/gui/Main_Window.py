@@ -262,16 +262,11 @@ class MainWindow(QMainWindow):
         )
 
     def _extract_finished(self, bbl_path, cli_data, merge):
-        from fpv_tuner.ui.app_state import CliDump
+        from fpv_tuner.ui.app_state import make_cli_dump
         from fpv_tuner.blackbox.loader import load_log
         self.extract_action.setEnabled(True)
         if cli_data is not None:
-            self.app_state.set_cli(CliDump(
-                raw_text=cli_data.raw_text,
-                version=cli_data.version,
-                settings=cli_data.settings,
-                file_path="",
-            ))
+            self.app_state.set_cli(make_cli_dump(cli_data))
         self._set_status("Loading extracted log...")
         df, pids, error = load_log(bbl_path, merge_all_segments=merge)
         self.on_load_finished(bbl_path, df, pids, error)
@@ -357,16 +352,11 @@ class MainWindow(QMainWindow):
             self.sync_action.setEnabled(True)
             if status_bar is not None:
                 status_bar.showMessage("Ready", 3000)
-            from fpv_tuner.ui.app_state import CliDump
+            from fpv_tuner.ui.app_state import make_cli_dump
             if cli_data.errors:
                 QMessageBox.warning(self, "Sync Failed", "\n".join(cli_data.errors))
                 return
-            self.app_state.set_cli(CliDump(
-                raw_text=cli_data.raw_text,
-                version=cli_data.version,
-                settings=cli_data.settings,
-                file_path="",
-            ))
+            self.app_state.set_cli(make_cli_dump(cli_data))
             QMessageBox.information(
                 self, "Sync Complete",
                 f"Loaded CLI dump — BF {cli_data.version or '?'} "

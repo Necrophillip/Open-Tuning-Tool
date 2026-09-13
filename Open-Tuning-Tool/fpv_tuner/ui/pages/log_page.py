@@ -14,7 +14,7 @@ from fpv_tuner.ui.widgets.dropzone import DropZone
 from fpv_tuner.ui.widgets.serial_port_dialog import SerialPortDialog
 from fpv_tuner.ui.widgets.bbl_select_dialog import BblSelectDialog
 from fpv_tuner.ui.extraction_flow import ExtractionFlow
-from fpv_tuner.ui.app_state import AppState, LogSession, CliDump
+from fpv_tuner.ui.app_state import AppState, LogSession, make_cli_dump
 from fpv_tuner.ui.theme import Colors, Spacing, Typography
 from fpv_tuner.ui.toasts import ToastManager
 
@@ -197,12 +197,7 @@ class LogPage(WizardPage):
     def _on_extract_finished(self, bbl_path, cli_data):
         # Store the auto-extracted CLI dump.
         if cli_data is not None:
-            self.state.set_cli(CliDump(
-                raw_text=cli_data.raw_text,
-                version=cli_data.version,
-                settings=cli_data.settings,
-                file_path="",
-            ))
+            self.state.set_cli(make_cli_dump(cli_data))
             self.toasts.success(
                 f"CLI dump loaded — BF {cli_data.version or '?'} "
                 f"({len(cli_data.settings)} settings)"
@@ -269,12 +264,7 @@ class LogPage(WizardPage):
         if cli_data.errors:
             self.toasts.error("; ".join(cli_data.errors))
             return
-        self.state.set_cli(CliDump(
-            raw_text=cli_data.raw_text,
-            version=cli_data.version,
-            settings=cli_data.settings,
-            file_path="",
-        ))
+        self.state.set_cli(make_cli_dump(cli_data))
         self.toasts.success(
             f"CLI dump loaded — BF {cli_data.version or '?'} "
             f"({len(cli_data.settings)} settings)"

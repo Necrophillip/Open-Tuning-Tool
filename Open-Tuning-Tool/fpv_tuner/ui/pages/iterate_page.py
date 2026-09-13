@@ -186,7 +186,32 @@ class IteratePage(WizardPage):
         """)
         layout.addWidget(metrics_label)
 
+        # Revert action (only if this session recorded applied changes)
+        if getattr(snap, "applied_changes", None):
+            revert_row = QHBoxLayout()
+            revert_btn = QPushButton("↩  Revert to this session")
+            revert_btn.setProperty("variant", "ghost")
+            revert_btn.clicked.connect(lambda _=False, s=snap: self._show_revert(s))
+            revert_row.addStretch()
+            revert_row.addWidget(revert_btn)
+            layout.addLayout(revert_row)
+
         return card
+
+    def _show_revert(self, snap):
+        """Show the CLI commands that revert to a previous session."""
+        from PyQt6.QtWidgets import QApplication, QMessageBox
+        from fpv_tuner.core.session_history import build_revert_commands
+        commands = build_revert_commands(snap)
+        box = QMessageBox(self)
+        box.setWindowTitle("Revert Commands")
+        box.setText(
+            "Paste these commands into the Betaflight CLI (or use 'Write to FC' "
+            "after selecting the FC) to revert to this session's settings:"
+        )
+        box.setDetailedText(commands)
+        box.setStandardButtons(QMessageBox.StandardButton.Ok)
+        box.exec()
 
     def _build_comparison_card(self, older, newer) -> QFrame:
         """Compare two most recent sessions."""
