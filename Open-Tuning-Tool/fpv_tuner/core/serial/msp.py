@@ -14,9 +14,9 @@ from fpv_tuner.core.serial.connection import SerialConnection, SerialConnectionE
 
 MSP_PREFIX = b"$M"
 
-# Direction bytes.
-MSP_DIR_TO_FC = ord(">")
-MSP_DIR_FROM_FC = ord("<")
+# Direction bytes ('<' to the FC, '>' from the FC).
+MSP_DIR_TO_FC = ord("<")
+MSP_DIR_FROM_FC = ord(">")
 
 # Command IDs (Betaflight msp_protocol.h).
 MSP_API_VERSION = 1

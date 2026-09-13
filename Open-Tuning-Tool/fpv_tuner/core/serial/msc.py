@@ -147,21 +147,69 @@ def eject(mount_path: str) -> bool:
     """
     Best-effort eject of a mounted volume so the FC reboots to firmware.
 
-    Returns True on success, False if no method succeeded.
+    Tries the mount path first, then falls back to the backing disk device.
+    Returns True if any eject/unmount command succeeded.
+
+    Note: some flight controllers stay in mass-storage mode until the USB
+    cable is physically re-plugged, regardless of a software eject.  Callers
+    should treat a ``False``/remount as a hint to ask the user to reconnect.
     """
     try:
         if sys.platform == "darwin":
-            subprocess.run(["diskutil", "eject", mount_path], check=True,
-                           capture_output=True, timeout=20)
-            return True
+            for target in (mount_path, _disk_device_for_mount(mount_path)):
+                if not target:
+                    continue
+                if _run_eject(["diskutil", "eject", target]):
+                    return True
+                if _run_eject(["diskutil", "unmountDisk", "force", target]):
+                    return True
+            return False
         elif sys.platform.startswith("linux"):
-            subprocess.run(["udisksctl", "unmount", "-b", mount_path],
-                           check=True, capture_output=True, timeout=20)
-            return True
+            dev = _disk_device_for_mount(mount_path) or mount_path
+            return _run_eject(["udisksctl", "unmount", "-b", dev])
         # Windows: ejecting requires more work; the user can safely remove.
         return False
     except (subprocess.SubprocessError, OSError, FileNotFoundError):
         return False
+
+
+def _run_eject(cmd: list[str]) -> bool:
+    """Run an eject/unmount command; True on success (exit code 0)."""
+    try:
+        subprocess.run(cmd, check=True, capture_output=True, timeout=20)
+        return True
+    except (subprocess.SubprocessError, OSError, FileNotFoundError):
+        return False
+
+
+def _disk_device_for_mount(mount_path: str) -> Optional[str]:
+    """
+    Resolve a mount point to its backing device (e.g. ``/dev/disk4``).
+
+    Returns None if it cannot be determined.
+    """
+    try:
+        if sys.platform == "darwin":
+            out = subprocess.run(
+                ["diskutil", "info", "-plist", mount_path],
+                capture_output=True, text=True, timeout=10,
+            )
+            if out.returncode != 0:
+                return None
+            import plistlib
+            info = plistlib.loads(out.stdout.encode("utf-8"))
+            dev = info.get("ParentWholeDisk") or info.get("DeviceIdentifier")
+            return f"/dev/{dev}" if dev else None
+        elif sys.platform.startswith("linux"):
+            out = subprocess.run(
+                ["findmnt", "-no", "SOURCE", mount_path],
+                capture_output=True, text=True, timeout=10,
+            )
+            if out.returncode == 0:
+                return out.stdout.strip() or None
+        return None
+    except (subprocess.SubprocessError, OSError, ImportError, ValueError):
+        return None
 
 
 # ── Orchestration ─────────────────────────────────────────────────
