@@ -1,20 +1,42 @@
 import os
 import numpy as np
+import pandas as pd
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QListWidget, QListWidgetItem, QComboBox, QFormLayout, QPushButton,
-    QStackedWidget, QTextEdit, QSlider
+    QStackedWidget, QTextEdit, QSlider, QTabWidget, QSplitter
 )
 from PyQt6.QtCore import Qt
 import pyqtgraph as pg
-from fpv_tuner.analysis.noise import calculate_psd, calculate_spectrogram, calculate_signal_stats
+from fpv_tuner.analysis.noise import (
+    calculate_psd, calculate_spectrogram, calculate_signal_stats,
+    calculate_throttle_noise_heatmap,
+    calculate_pre_post_filter_psd, calculate_pre_post_filter_spectrogram
+)
 from fpv_tuner.analysis.utils import apply_smoothing
+
+
+def _make_thermal_colormap():
+    """Create a thermal/heat colormap (black → red → orange → yellow → white)."""
+    positions = [0.0, 0.25, 0.5, 0.75, 1.0]
+    colors = [
+        (0, 0, 0),        # black
+        (128, 0, 0),      # dark red
+        (255, 100, 0),    # orange
+        (255, 255, 0),    # yellow
+        (255, 255, 255),  # white
+    ]
+    return pg.ColorMap(positions, colors)
+
 
 class NoiseTab(QWidget):
     SIGNAL_MAP = {
-        "Gyro (Raw) - Roll": ['gyroADC[0]', 'gyroUnfilt[0]'],
-        "Gyro (Raw) - Pitch": ['gyroADC[1]', 'gyroUnfilt[1]'],
-        "Gyro (Raw) - Yaw": ['gyroADC[2]', 'gyroUnfilt[2]'],
+        "Gyro (Filtered) - Roll": ['gyroADC[0]'],
+        "Gyro (Filtered) - Pitch": ['gyroADC[1]'],
+        "Gyro (Filtered) - Yaw": ['gyroADC[2]'],
+        "Gyro (Raw) - Roll": ['gyroUnfilt[0]'],
+        "Gyro (Raw) - Pitch": ['gyroUnfilt[1]'],
+        "Gyro (Raw) - Yaw": ['gyroUnfilt[2]'],
         "D-Term - Roll": ['dTerm[0]', 'axisD[0]'],
         "D-Term - Pitch": ['dTerm[1]', 'axisD[1]'],
         "D-Term - Yaw": ['dTerm[2]', 'axisD[2]'],
@@ -24,19 +46,19 @@ class NoiseTab(QWidget):
         "Motor 4": ['motor[3]'],
     }
     PLOT_COLORS = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b']
+    THROTTLE_COLS = ['rcCommand[3]', 'throttle', 'motor[0]']
 
     def __init__(self):
         super().__init__()
         self.logs = {}
-        self.is_psd_mode = True
 
         main_layout = QHBoxLayout(self)
         controls_layout = QVBoxLayout()
         plots_layout = QVBoxLayout()
         main_layout.addLayout(controls_layout, 1)
-        main_layout.addLayout(plots_layout, 3)
+        main_layout.addLayout(plots_layout, 4)
 
-        # --- Controls ---
+        # ─── Controls ───
         nperseg_layout = QFormLayout()
         self.nperseg_combo = QComboBox()
         self.nperseg_combo.addItems(["256", "512", "1024", "2048", "4096"])
@@ -45,7 +67,7 @@ class NoiseTab(QWidget):
         controls_layout.addLayout(nperseg_layout)
 
         smoothing_layout = QHBoxLayout()
-        smoothing_layout.addWidget(QLabel("Smoothing Level:"))
+        smoothing_layout.addWidget(QLabel("Smoothing:"))
         self.smoothing_slider = QSlider(Qt.Orientation.Horizontal)
         self.smoothing_slider.setRange(0, 20)
         self.smoothing_slider.setValue(0)
@@ -56,65 +78,155 @@ class NoiseTab(QWidget):
         smoothing_layout.addWidget(self.smoothing_label)
         controls_layout.addLayout(smoothing_layout)
 
-        self.view_toggle_button = QPushButton("Show Spectrogram (DSA)")
-        controls_layout.addWidget(self.view_toggle_button)
-
         controls_layout.addWidget(QLabel("Signals:"))
         self.signal_list = QListWidget()
         for signal_name in self.SIGNAL_MAP.keys():
             item = QListWidgetItem(signal_name)
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-            if "Gyro (Raw) - Roll" in signal_name:
-                 item.setCheckState(Qt.CheckState.Checked)
+            if "Gyro (Filtered) - Roll" in signal_name:
+                item.setCheckState(Qt.CheckState.Checked)
             else:
-                 item.setCheckState(Qt.CheckState.Unchecked)
+                item.setCheckState(Qt.CheckState.Unchecked)
             self.signal_list.addItem(item)
-
         controls_layout.addWidget(self.signal_list)
 
-        controls_layout.addWidget(QLabel("Signal Statistics (PSD Mode):"))
+        controls_layout.addWidget(QLabel("Signal Statistics:"))
         self.stats_text = QTextEdit()
         self.stats_text.setReadOnly(True)
         self.stats_text.setFontFamily("monospace")
-        self.stats_text.setFixedHeight(100)
+        self.stats_text.setFixedHeight(120)
         controls_layout.addWidget(self.stats_text)
         controls_layout.addStretch()
 
-        # --- Plots ---
+        # ─── Sub-tabbed analysis views ───
+        self.analysis_tabs = QTabWidget()
+
+        # ─ Tab 1: PSD + Trace ─
+        psd_widget = QWidget()
+        psd_layout = QVBoxLayout(psd_widget)
         self.trace_plot = pg.PlotWidget(title="Time Series Trace")
         self.trace_plot.addLegend()
         self.trace_plot.setDownsampling(auto=True, mode='peak')
         self.trace_plot.setClipToView(True)
+        self.trace_plot.setLabel('bottom', 'Time (s)')
 
-        self.psd_plot = pg.PlotWidget(title="Power Spectral Density (PSD)")
+        self.psd_plot = pg.PlotWidget(title="Power Spectral Density")
         self.psd_plot.addLegend()
         self.psd_plot.setLogMode(x=True, y=True)
         self.psd_plot.setLabel('bottom', 'Frequency (Hz)')
-        self.psd_plot.setLabel('left', 'Power/Frequency (dB/Hz)')
+        self.psd_plot.setLabel('left', 'Power (dB/Hz)')
+        self.psd_plot.showGrid(x=True, y=True, alpha=0.3)
+
+        psd_layout.addWidget(self.trace_plot)
+        psd_layout.addWidget(self.psd_plot)
+        self.analysis_tabs.addTab(psd_widget, "📈 PSD")
+
+        # ─ Tab 2: Spectrogram (DSA) ─
+        spec_widget = QWidget()
+        spec_layout = QVBoxLayout(spec_widget)
+        self.spec_trace_plot = pg.PlotWidget(title="Time Series Trace")
+        self.spec_trace_plot.addLegend()
+        self.spec_trace_plot.setDownsampling(auto=True, mode='peak')
+        self.spec_trace_plot.setClipToView(True)
+        self.spec_trace_plot.setLabel('bottom', 'Time (s)')
 
         spectrogram_plot_item = pg.PlotItem()
         spectrogram_plot_item.setLabel('bottom', 'Time (s)')
         spectrogram_plot_item.setLabel('left', 'Frequency (Hz)')
         self.spectrogram_view = pg.ImageView(view=spectrogram_plot_item)
+        self.spectrogram_view.setColorMap(_make_thermal_colormap())
 
-        self.plot_stack = QStackedWidget()
-        self.plot_stack.addWidget(self.psd_plot)
-        self.plot_stack.addWidget(self.spectrogram_view)
+        spec_layout.addWidget(self.spec_trace_plot)
+        spec_layout.addWidget(self.spectrogram_view)
+        self.analysis_tabs.addTab(spec_widget, "🌈 Spectrogram")
 
-        plots_layout.addWidget(self.trace_plot)
-        plots_layout.addWidget(self.plot_stack)
+        # ─ Tab 3: Throttle vs Noise Heatmap ─
+        heatmap_widget = QWidget()
+        heatmap_layout = QVBoxLayout(heatmap_widget)
 
-        # --- Connections ---
+        # Axis selector for heatmap
+        hm_controls = QHBoxLayout()
+        hm_controls.addWidget(QLabel("Signal:"))
+        self.heatmap_signal_combo = QComboBox()
+        self.heatmap_signal_combo.addItems([
+            "Gyro (Filtered) - Roll", "Gyro (Filtered) - Pitch", "Gyro (Filtered) - Yaw",
+            "Gyro (Raw) - Roll", "Gyro (Raw) - Pitch", "Gyro (Raw) - Yaw",
+            "D-Term - Roll", "D-Term - Pitch", "D-Term - Yaw",
+        ])
+        hm_controls.addWidget(self.heatmap_signal_combo)
+        hm_controls.addWidget(QLabel("Throttle Src:"))
+        self.throttle_src_combo = QComboBox()
+        self.throttle_src_combo.addItems(["rcCommand[3]", "Avg Motors"])
+        hm_controls.addWidget(self.throttle_src_combo)
+        hm_controls.addStretch()
+        heatmap_layout.addLayout(hm_controls)
+
+        heatmap_plot_item = pg.PlotItem()
+        heatmap_plot_item.setLabel('bottom', 'Throttle (%)')
+        heatmap_plot_item.setLabel('left', 'Frequency (Hz)')
+        heatmap_plot_item.setTitle('Throttle vs Noise Heatmap')
+        self.heatmap_view = pg.ImageView(view=heatmap_plot_item)
+        self.heatmap_view.setColorMap(_make_thermal_colormap())
+
+        heatmap_layout.addWidget(self.heatmap_view)
+        self.analysis_tabs.addTab(heatmap_widget, "🔥 Throttle vs Noise")
+
+        # ─ Tab 4: Pre/Post Filter Comparison ─
+        filter_widget = QWidget()
+        filter_layout = QVBoxLayout(filter_widget)
+
+        filter_controls = QHBoxLayout()
+        filter_controls.addWidget(QLabel("Axis:"))
+        self.filter_axis_combo = QComboBox()
+        self.filter_axis_combo.addItems(["Roll", "Pitch", "Yaw"])
+        filter_controls.addWidget(self.filter_axis_combo)
+        filter_controls.addStretch()
+        filter_layout.addLayout(filter_controls)
+
+        # PSD comparison plot
+        self.filter_psd_plot = pg.PlotWidget(title="Pre-Filter vs Post-Filter PSD")
+        self.filter_psd_plot.addLegend()
+        self.filter_psd_plot.setLogMode(x=True, y=True)
+        self.filter_psd_plot.setLabel('bottom', 'Frequency (Hz)')
+        self.filter_psd_plot.setLabel('left', 'Power (dB/Hz)')
+        self.filter_psd_plot.showGrid(x=True, y=True, alpha=0.3)
+        filter_layout.addWidget(self.filter_psd_plot)
+
+        # Spectrogram comparison: pre and post side by side
+        spec_compare_layout = QHBoxLayout()
+
+        pre_spec_item = pg.PlotItem()
+        pre_spec_item.setLabel('bottom', 'Time (s)')
+        pre_spec_item.setLabel('left', 'Frequency (Hz)')
+        pre_spec_item.setTitle('Pre-Filter (Raw)')
+        self.pre_filter_spec = pg.ImageView(view=pre_spec_item)
+        self.pre_filter_spec.setColorMap(_make_thermal_colormap())
+        spec_compare_layout.addWidget(self.pre_filter_spec)
+
+        post_spec_item = pg.PlotItem()
+        post_spec_item.setLabel('bottom', 'Time (s)')
+        post_spec_item.setLabel('left', 'Frequency (Hz)')
+        post_spec_item.setTitle('Post-Filter')
+        self.post_filter_spec = pg.ImageView(view=post_spec_item)
+        self.post_filter_spec.setColorMap(_make_thermal_colormap())
+        spec_compare_layout.addWidget(self.post_filter_spec)
+
+        filter_layout.addLayout(spec_compare_layout)
+        self.analysis_tabs.addTab(filter_widget, "🛡️ Filter Analysis")
+
+        plots_layout.addWidget(self.analysis_tabs)
+
+        # ─── Connections ───
         self.nperseg_combo.currentTextChanged.connect(self.update_plots)
         self.signal_list.itemChanged.connect(self.update_plots)
-        self.view_toggle_button.clicked.connect(self.on_toggle_view_clicked)
         self.smoothing_slider.valueChanged.connect(self.on_smoothing_changed)
+        self.heatmap_signal_combo.currentTextChanged.connect(self.update_plots)
+        self.throttle_src_combo.currentTextChanged.connect(self.update_plots)
+        self.filter_axis_combo.currentTextChanged.connect(self.update_plots)
+        self.analysis_tabs.currentChanged.connect(self.update_plots)
 
     def on_smoothing_changed(self, value):
-        if value == 0:
-            self.smoothing_label.setText("Raw")
-        else:
-            self.smoothing_label.setText(f"Level {value}")
+        self.smoothing_label.setText("Raw" if value == 0 else f"Level {value}")
         self.update_plots()
 
     def set_data(self, logs):
@@ -122,109 +234,237 @@ class NoiseTab(QWidget):
         self.update_plots()
 
     def update_plots(self):
-        # Clear all plots and stats first
-        self.trace_plot.clear()
-        self.psd_plot.clear()
-        self.spectrogram_view.clear()
-        self.stats_text.clear()
-
         if not self.logs:
             return
 
-        checked_signals = [self.signal_list.item(i).text() for i in range(self.signal_list.count()) if self.signal_list.item(i).checkState() == Qt.CheckState.Checked]
+        current_tab = self.analysis_tabs.currentIndex()
+        if current_tab == 0:
+            self._update_psd_view()
+        elif current_tab == 1:
+            self._update_spectrogram_view()
+        elif current_tab == 2:
+            self._update_throttle_heatmap()
+        elif current_tab == 3:
+            self._update_filter_analysis()
 
-        if not checked_signals:
+    # ─── PSD View ───
+    def _update_psd_view(self):
+        self.trace_plot.clear()
+        self.psd_plot.clear()
+        self.stats_text.clear()
+
+        checked = self._get_checked_signals()
+        if not checked:
             return
 
         nperseg = int(self.nperseg_combo.currentText())
-        filename, log_data_dict = next(iter(self.logs.items()))
-        log_data = log_data_dict.get('df')
-        if log_data is None:
+        df = self._get_first_df()
+        if df is None:
             return
 
-        time_col = self._find_column(log_data, ['time (us)', 'time'])
+        time_col = self._find_column(df, ['time (us)', 'time'])
         if not time_col:
             return
-        time_us = log_data[time_col]
+        time_us = df[time_col]
         time_s = time_us / 1_000_000
 
-        # --- PSD Mode ---
-        if self.is_psd_mode:
-            self.trace_plot.addLegend()
-            self.psd_plot.addLegend()
-            full_stats_text = ""
-            for i, signal_name in enumerate(checked_signals):
-                possible_names = self.SIGNAL_MAP.get(signal_name)
-                if not possible_names: continue
+        full_stats = ""
+        for i, signal_name in enumerate(checked):
+            col_name = self._find_column(df, self.SIGNAL_MAP.get(signal_name, []))
+            if not col_name:
+                continue
 
-                col_name = self._find_column(log_data, possible_names)
-                if col_name:
-                    color = self.PLOT_COLORS[i % len(self.PLOT_COLORS)]
-                    pen = pg.mkPen(color=color)
+            color = self.PLOT_COLORS[i % len(self.PLOT_COLORS)]
+            pen = pg.mkPen(color=color, width=1)
 
-                    signal_data = log_data[col_name]
-                    smoothed_signal = apply_smoothing(signal_data, self.smoothing_slider.value())
+            signal_data = df[col_name]
+            smoothed = apply_smoothing(signal_data, self.smoothing_slider.value())
+            self.trace_plot.plot(time_s, smoothed, pen=pen, name=signal_name)
 
-                    self.trace_plot.plot(time_s, smoothed_signal, pen=pen, name=signal_name, autoDownsample=False)
-                    # PSD should be calculated on raw data, not smoothed data
-                    freq, psd = calculate_psd(signal_data, time_us, nperseg=nperseg)
+            freq, psd = calculate_psd(signal_data, time_us, nperseg=nperseg)
+            stats = {}
+            if freq is not None and psd is not None and len(freq) > 0:
+                psd_db = 10 * np.log10(psd + 1e-12)
+                self.psd_plot.plot(freq, psd_db, pen=pen, name=signal_name)
+                stats = calculate_signal_stats(signal_data, freq, psd)
+            else:
+                stats = calculate_signal_stats(signal_data, None, None)
 
-                    stats = {}
-                    if freq is not None and psd is not None and len(freq) > 0 and len(psd) > 0:
-                        psd_db = 10 * np.log10(psd + 1e-12)
-                        self.psd_plot.plot(freq, psd_db, pen=pen, name=f"{signal_name} PSD")
-                        stats = calculate_signal_stats(signal_data, freq, psd)
-                    else:
-                        stats = calculate_signal_stats(signal_data, None, None)
+            full_stats += f"── {signal_name} ──\n"
+            for k, v in stats.items():
+                full_stats += f"  {k}: {v}\n"
+            full_stats += "\n"
 
-                    full_stats_text += f"--- {signal_name} ---\n"
-                    for key, value in stats.items():
-                        full_stats_text += f"  {key}: {value}\n"
-                    full_stats_text += "\n"
+        self.stats_text.setText(full_stats)
 
-            self.stats_text.setText(full_stats_text)
+    # ─── Spectrogram View ───
+    def _update_spectrogram_view(self):
+        self.spec_trace_plot.clear()
+        self.spectrogram_view.clear()
 
-        # --- Spectrogram Mode ---
-        else:
-            self.trace_plot.addLegend(None) # Hide legend
-            self.psd_plot.clear()
+        checked = self._get_checked_signals()
+        if not checked:
+            return
 
-            # Use first selected signal for spectrogram
-            signal_name = checked_signals[0]
-            possible_names = self.SIGNAL_MAP.get(signal_name)
-            if not possible_names: return
+        nperseg = int(self.nperseg_combo.currentText())
+        df = self._get_first_df()
+        if df is None:
+            return
 
-            col_name = self._find_column(log_data, possible_names)
+        time_col = self._find_column(df, ['time (us)', 'time'])
+        if not time_col:
+            return
+        time_us = df[time_col]
+        time_s = time_us / 1_000_000
+
+        # Plot all checked traces
+        for i, signal_name in enumerate(checked):
+            col_name = self._find_column(df, self.SIGNAL_MAP.get(signal_name, []))
             if col_name:
-                signal_data = log_data[col_name]
-                smoothed_signal = apply_smoothing(signal_data, self.smoothing_slider.value())
-                self.trace_plot.plot(time_s, smoothed_signal, pen='w', name=signal_name, autoDownsample=False)
+                color = self.PLOT_COLORS[i % len(self.PLOT_COLORS)]
+                smoothed = apply_smoothing(df[col_name], self.smoothing_slider.value())
+                self.spec_trace_plot.plot(time_s, smoothed, pen=pg.mkPen(color=color), name=signal_name)
 
-                # Spectrogram should also be calculated on raw data
-                freqs, times, Sxx = calculate_spectrogram(signal_data, time_us, nperseg=nperseg)
+        # Spectrogram for first signal
+        signal_name = checked[0]
+        col_name = self._find_column(df, self.SIGNAL_MAP.get(signal_name, []))
+        if not col_name:
+            return
 
-                if freqs is not None and times is not None and Sxx is not None:
-                    # Log scale for better color visualization
-                    Sxx_log = np.log10(Sxx + 1e-12) # Add epsilon to avoid log(0)
+        freqs, times, Sxx = calculate_spectrogram(df[col_name], time_us, nperseg=nperseg)
+        if freqs is not None and times is not None and Sxx is not None:
+            Sxx_log = np.log10(Sxx + 1e-12)
+            tr = pg.QtGui.QTransform()
+            tr.scale(times[-1] / Sxx.shape[1], freqs[-1] / Sxx.shape[0])
+            self.spectrogram_view.setImage(Sxx_log.T, autoRange=False, transform=tr)
+            self.spectrogram_view.getView().setTitle(f"Spectrogram — {signal_name}")
 
-                    # pyqtgraph ImageView needs a transform to set the axes scales correctly
-                    tr = pg.QtGui.QTransform()
-                    tr.scale(times[-1] / Sxx.shape[1], freqs[-1] / Sxx.shape[0])
-                    self.spectrogram_view.setImage(Sxx_log.T, autoRange=False, transform=tr)
-                    self.spectrogram_view.getView().setTitle(f"Spectrogram - {signal_name}")
+    # ─── Throttle vs Noise Heatmap ───
+    def _update_throttle_heatmap(self):
+        self.heatmap_view.clear()
 
-    def on_toggle_view_clicked(self):
-        self.is_psd_mode = not self.is_psd_mode
-        if self.is_psd_mode:
-            self.plot_stack.setCurrentWidget(self.psd_plot)
-            self.view_toggle_button.setText("Show Spectrogram (DSA)")
-            self.stats_text.setVisible(True)
+        df = self._get_first_df()
+        if df is None:
+            return
+
+        time_col = self._find_column(df, ['time (us)', 'time'])
+        if not time_col:
+            return
+
+        # Get noise signal
+        signal_name = self.heatmap_signal_combo.currentText()
+        noise_col = self._find_column(df, self.SIGNAL_MAP.get(signal_name, []))
+        if not noise_col:
+            return
+
+        # Get throttle
+        throttle_src = self.throttle_src_combo.currentText()
+        throttle_data = None
+
+        def _normalize_to_pct(series):
+            """Safely normalize a series to 0-100 range, handling constant values."""
+            mn, mx = series.min(), series.max()
+            if mx > mn:
+                return (series - mn) / (mx - mn) * 100.0
+            # Constant value: map to a fixed percentage
+            return pd.Series(np.full(len(series), 50.0), index=series.index)
+
+        if throttle_src == "Avg Motors":
+            motor_cols = [f'motor[{i}]' for i in range(4)]
+            available = [c for c in motor_cols if c in df.columns]
+            if available:
+                motor_avg = df[available].mean(axis=1)
+                throttle_data = _normalize_to_pct(motor_avg)
         else:
-            self.plot_stack.setCurrentWidget(self.spectrogram_view)
-            self.view_toggle_button.setText("Show PSD")
-            self.stats_text.setVisible(False) # Stats are for PSD only
+            throttle_col = self._find_column(df, ['rcCommand[3]', 'throttle'])
+            if throttle_col:
+                throttle_data = _normalize_to_pct(df[throttle_col].astype(float))
 
-        self.update_plots()
+        if throttle_data is None:
+            return
+
+        nperseg = int(self.nperseg_combo.currentText())
+        throttle_centers, freq_bins, heatmap = calculate_throttle_noise_heatmap(
+            df[noise_col], throttle_data, df[time_col],
+            n_throttle_bins=40, n_freq_bins=128, nperseg=nperseg
+        )
+
+        if throttle_centers is None or heatmap is None:
+            return
+
+        # Set up the image with correct axis scaling
+        tr = pg.QtGui.QTransform()
+        tr.scale(100.0 / heatmap.shape[1], freq_bins[-1] / heatmap.shape[0])
+        self.heatmap_view.setImage(heatmap, autoRange=False, transform=tr)
+        self.heatmap_view.getView().setTitle(f"Throttle vs Noise — {signal_name}")
+
+    # ─── Pre/Post Filter Analysis ───
+    def _update_filter_analysis(self):
+        self.filter_psd_plot.clear()
+        self.pre_filter_spec.clear()
+        self.post_filter_spec.clear()
+
+        df = self._get_first_df()
+        if df is None:
+            return
+
+        time_col = self._find_column(df, ['time (us)', 'time'])
+        if not time_col:
+            return
+
+        axis_map = {"Roll": 0, "Pitch": 1, "Yaw": 2}
+        axis_idx = axis_map.get(self.filter_axis_combo.currentText(), 0)
+        nperseg = int(self.nperseg_combo.currentText())
+
+        # ── PSD comparison ──
+        psd_result = calculate_pre_post_filter_psd(df, time_col, axis_idx, nperseg=nperseg)
+        if psd_result:
+            freq = psd_result.get('freq')
+            if freq is not None:
+                if 'psd_pre' in psd_result:
+                    psd_db = 10 * np.log10(psd_result['psd_pre'] + 1e-12)
+                    self.filter_psd_plot.plot(freq, psd_db,
+                                              pen=pg.mkPen('#ff4444', width=2),
+                                              name='Pre-Filter (Raw)')
+                if 'psd_post' in psd_result:
+                    psd_db = 10 * np.log10(psd_result['psd_post'] + 1e-12)
+                    self.filter_psd_plot.plot(freq, psd_db,
+                                              pen=pg.mkPen('#44ff44', width=2),
+                                              name='Post-Filter')
+
+        # ── Spectrogram comparison ──
+        spec_result = calculate_pre_post_filter_spectrogram(df, time_col, axis_idx, nperseg=nperseg)
+        if spec_result:
+            freqs = spec_result.get('freqs')
+            times = spec_result.get('times')
+            if freqs is not None and times is not None:
+                if 'Sxx_pre' in spec_result:
+                    Sxx_log = np.log10(spec_result['Sxx_pre'] + 1e-12)
+                    tr = pg.QtGui.QTransform()
+                    tr.scale(times[-1] / spec_result['Sxx_pre'].shape[1],
+                             freqs[-1] / spec_result['Sxx_pre'].shape[0])
+                    self.pre_filter_spec.setImage(Sxx_log.T, autoRange=False, transform=tr)
+
+                if 'Sxx_post' in spec_result:
+                    Sxx_log = np.log10(spec_result['Sxx_post'] + 1e-12)
+                    tr = pg.QtGui.QTransform()
+                    tr.scale(times[-1] / spec_result['Sxx_post'].shape[1],
+                             freqs[-1] / spec_result['Sxx_post'].shape[0])
+                    self.post_filter_spec.setImage(Sxx_log.T, autoRange=False, transform=tr)
+
+    # ─── Helpers ───
+    def _get_checked_signals(self):
+        return [
+            self.signal_list.item(i).text()
+            for i in range(self.signal_list.count())
+            if self.signal_list.item(i).checkState() == Qt.CheckState.Checked
+        ]
+
+    def _get_first_df(self):
+        if not self.logs:
+            return None
+        _, log_dict = next(iter(self.logs.items()))
+        return log_dict.get('df')
 
     def _find_column(self, df, possible_names):
         for name in possible_names:

@@ -14,17 +14,21 @@ class LogLoaderWorker(QObject):
     def __init__(self):
         super().__init__()
 
-    @pyqtSlot(list)
-    def process_files(self, file_paths):
+    @pyqtSlot(list, bool)
+    def process_files(self, file_paths, merge_segments=True):
         """
         Load the log files. This is a slot connected to a signal
         from the main thread.
+
+        Args:
+            file_paths (list): Paths to log files.
+            merge_segments (bool): Whether to merge all BBL segments or pick the longest.
         """
         total_files = len(file_paths)
         for i, file_path in enumerate(file_paths):
             self.progress.emit(f"Loading file {i + 1} of {total_files}: {file_path}...")
             try:
-                df, pids, error = load_log(file_path)
+                df, pids, error = load_log(file_path, merge_all_segments=merge_segments)
                 self.finished.emit(file_path, df, pids, error)
             except Exception as e:
                 self.finished.emit(file_path, None, None, str(e))

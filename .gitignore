@@ -14,3 +14,11 @@ dist/
 .venv
 venv/
 env/
+
+# OS
+.DS_Store
+.vscode/
+
+# External tools / vendored repositories (not part of the project)
+blackbox-tools/
+blackbox-log-viewer-3.7.0/
