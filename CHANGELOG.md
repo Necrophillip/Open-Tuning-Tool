@@ -107,6 +107,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every recommendation against the CLI schema (never suggests an invalid command)
 - 🔧 `format_cli_commands` groups commands by scope and emits `profile`/`rateprofile`
 
+### Fixed
+- 🐛 MSP direction bytes were swapped (`$M<` to FC vs `$M>` from FC), preventing
+  the FC from entering mass-storage mode (verified against a real SPEEDYBEEF405AIO)
+- 🐛 Betaflight CLI swallows the first command after entering CLI mode; a warm-up
+  blank line is now sent so `set`/`get` are never silently lost (verified on hardware)
+
 ### Planned Features
 - 🎯 PID Tuning Recommendations
   - AI-based gain optimization

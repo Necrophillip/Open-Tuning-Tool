@@ -89,14 +89,28 @@ class CliSession:
         """Enter CLI mode and return the banner text."""
         self.conn.flush()
         self.conn.write(b"#")
+        banner = None
         for _ in range(2):
             try:
                 banner = self._read_to_prompt(self.enter_timeout)
-                self._entered = True
-                return banner
+                break
             except CliSessionError:
                 self.conn.write(b"#")  # some firmwares need a second '#'
-        raise CliSessionError("Could not enter CLI mode — is the port connected to a Betaflight FC?")
+        else:
+            raise CliSessionError("Could not enter CLI mode — is the port connected to a Betaflight FC?")
+
+        self._entered = True
+
+        # Betaflight swallows the *first* command after entering CLI mode
+        # (it is echoed but never executed). Send a blank line to absorb it
+        # so the first real command is not silently lost.
+        self.conn.write(b"\n")
+        try:
+            self._read_to_prompt(self.enter_timeout)
+        except CliSessionError:
+            pass
+
+        return banner
 
     def _command(self, cmd: str) -> str:
         if not self._entered:
@@ -201,11 +215,11 @@ def write_changes_to_fc(
 
     if prof:
         ordered.append(("__profile__", str(profile)))
+        ordered.extend(prof)
     ordered.extend(master + other)
     if rate:
         ordered.append(("__rateprofile__", str(rateprofile)))
-    ordered.extend(rate)
-    ordered.extend(prof)
+        ordered.extend(rate)
 
     try:
         with SerialConnection(port, baudrate=baudrate) as conn:
