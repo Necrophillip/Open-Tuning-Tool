@@ -1,14 +1,13 @@
 """
 Step 4 — Export / Review.
 
-Shows the analysis summary (step responses + noise heatmaps), the
-recommended changes, and generates a new CLI dump ready to apply.
+Shows the analysis summary (step responses + noise heatmaps) front and
+center, a compact summary of the recommended changes, and actions to
+apply them (write to FC / copy / show the generated CLI commands).
 """
-import os
-
 from PyQt6.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QPlainTextEdit,
-    QFileDialog, QMessageBox, QTabWidget, QWidget, QComboBox,
+    QMessageBox, QWidget, QComboBox, QDialog,
 )
 from PyQt6.QtCore import Qt
 
@@ -28,126 +27,41 @@ def _make_thermal_colormap():
     return pg.ColorMap(positions, colors)
 
 
+def _section_label(text: str) -> QLabel:
+    label = QLabel(text)
+    label.setStyleSheet(f"""
+        color: {Colors.TEXT_PRIMARY};
+        font-size: {Typography.SIZE_HEADING}px;
+        font-weight: 600;
+    """)
+    return label
+
+
 class ExportPage(WizardPage):
     STEP_TITLE = "Export"
-    STEP_SUBTITLE = "Get your new configuration"
+    STEP_SUBTITLE = "Review & apply your new configuration"
 
     def __init__(self, state: AppState, job_runner=None, parent=None):
         self._jobs = job_runner
         self._diff = None
         self._schema = None
+        self._cli_text = ""
         super().__init__(state, parent)
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(Spacing.XL, Spacing.XL, Spacing.XL, Spacing.XL)
-        layout.setSpacing(Spacing.LG)
+        layout.setContentsMargins(Spacing.LG, Spacing.MD, Spacing.LG, Spacing.MD)
+        layout.setSpacing(Spacing.SM)
 
-        layout.addWidget(self._make_title("Export your configuration"))
+        layout.addWidget(self._make_title("Export & Apply"))
         layout.addWidget(self._make_subtitle(
-            "Based on the analysis, here are the recommended changes. "
-            "Copy the CLI commands below or save the full dump."
+            "Review the analysis, then apply the recommended changes to your quad."
         ))
 
-        # ── Analysis review (step response + noise heatmaps) ──
-        self.review_tabs = QTabWidget()
-        self.review_tabs.setMaximumHeight(320)
-        self._build_step_response_tab()
-        self._build_heatmap_tab()
-        layout.addWidget(self.review_tabs)
-
-        # Changes summary
-        self.changes_label = QLabel("No changes recommended yet.")
-        self.changes_label.setTextFormat(Qt.TextFormat.RichText)
-        self.changes_label.setWordWrap(True)
-        self.changes_label.setStyleSheet(f"""
-            background-color: {Colors.BG_SURFACE};
-            border: 1px solid {Colors.BORDER_SUBTLE};
-            border-radius: {Radius.MD}px;
-            padding: {Spacing.MD}px;
-            color: {Colors.TEXT_SECONDARY};
-            font-size: {Typography.SIZE_BODY}px;
-        """)
-        layout.addWidget(self.changes_label)
-
-        # CLI output preview
-        self.cli_preview = QPlainTextEdit()
-        self.cli_preview.setReadOnly(True)
-        self.cli_preview.setPlaceholderText(
-            "CLI commands will appear here after analysis..."
-        )
-        self.cli_preview.setStyleSheet(f"""
-            QPlainTextEdit {{
-                background-color: {Colors.BG_APP};
-                border: 1px solid {Colors.BORDER_SUBTLE};
-                border-radius: {Radius.MD}px;
-                padding: {Spacing.MD}px;
-                color: {Colors.ACCENT};
-                font-family: {Typography.FAMILY_MONO};
-                font-size: {Typography.SIZE_CAPTION}px;
-            }}
-        """)
-        layout.addWidget(self.cli_preview, 1)
-
-        # Action buttons
-        btn_layout = QHBoxLayout()
-        btn_layout.setSpacing(Spacing.MD)
-
-        self.copy_btn = QPushButton("📋  Copy to Clipboard")
-        self.copy_btn.setProperty("variant", "primary")
-        self.copy_btn.clicked.connect(self._copy_to_clipboard)
-        btn_layout.addWidget(self.copy_btn)
-
-        self.save_btn = QPushButton("💾  Save to File")
-        self.save_btn.setProperty("variant", "ghost")
-        self.save_btn.clicked.connect(self._save_to_file)
-        btn_layout.addWidget(self.save_btn)
-
-        self.write_btn = QPushButton("🛰  Write to FC")
-        self.write_btn.setProperty("variant", "primary")
-        self.write_btn.setToolTip(
-            "Connect the FC via USB and apply these CLI changes directly."
-        )
-        self.write_btn.clicked.connect(self._write_to_fc)
-        btn_layout.addWidget(self.write_btn)
-
-        btn_layout.addStretch()
-        layout.addLayout(btn_layout)
-
-        # Instructions
-        instructions = QLabel(
-            "<b>How to apply:</b><br>"
-            "1. Open Betaflight Configurator<br>"
-            "2. Connect your quad<br>"
-            "3. Go to the CLI tab<br>"
-            "4. Paste the commands and press Enter<br>"
-            "5. Type <code>save</code> and press Enter<br>"
-            "6. Go fly! Then come back and load the new log."
-        )
-        instructions.setWordWrap(True)
-        instructions.setStyleSheet(f"""
-            color: {Colors.TEXT_SECONDARY};
-            font-size: {Typography.SIZE_BODY}px;
-            background-color: {Colors.BG_SURFACE};
-            border: 1px solid {Colors.BORDER_SUBTLE};
-            border-radius: {Radius.MD}px;
-            padding: {Spacing.MD}px;
-        """)
-        layout.addWidget(instructions)
-
-    def on_enter(self):
-        self._generate_recommendations()
-        self._render_review()
-
-    def can_proceed(self) -> bool:
-        return True  # Always can proceed from export
-
-    # ── Review UI ─────────────────────────────────────────────────
-
-    def _build_step_response_tab(self):
-        tab = QWidget()
-        layout = QHBoxLayout(tab)
-        layout.setSpacing(Spacing.SM)
+        # ── Step response (3 axes) ─────────────────────────────────
+        layout.addWidget(_section_label("📈  Step Response"))
+        step_row = QHBoxLayout()
+        step_row.setSpacing(Spacing.SM)
         self._step_plots = {}
         for axis in ("roll", "pitch", "yaw"):
             plot = pg.PlotWidget()
@@ -157,32 +71,75 @@ class ExportPage(WizardPage):
             plot.showGrid(x=True, y=True, alpha=0.2)
             plot.setDownsampling(auto=True, mode="peak")
             self._step_plots[axis] = plot
-            layout.addWidget(plot)
-        self.review_tabs.addTab(tab, "📈 Step Response")
+            step_row.addWidget(plot)
+        layout.addLayout(step_row, 3)
 
-    def _build_heatmap_tab(self):
-        tab = QWidget()
-        layout = QVBoxLayout(tab)
-        layout.setSpacing(Spacing.SM)
-
-        controls = QHBoxLayout()
-        controls.addWidget(QLabel("Axis:"))
+        # ── Noise heatmap ──────────────────────────────────────────
+        layout.addWidget(_section_label("🔥  Noise Heatmap"))
+        heat_controls = QHBoxLayout()
+        heat_controls.addWidget(QLabel("Axis:"))
         self._heatmap_axis_combo = QComboBox()
         self._heatmap_axis_combo.addItems(["roll", "pitch", "yaw"])
         self._heatmap_axis_combo.currentTextChanged.connect(self._render_heatmap)
-        controls.addWidget(self._heatmap_axis_combo)
-        controls.addStretch()
-        layout.addLayout(controls)
+        heat_controls.addWidget(self._heatmap_axis_combo)
+        heat_controls.addStretch()
+        layout.addLayout(heat_controls)
 
         heatmap_plot_item = pg.PlotItem()
         heatmap_plot_item.setLabel("bottom", "Throttle (%)")
         heatmap_plot_item.setLabel("left", "Frequency (Hz)")
-        heatmap_plot_item.setTitle("Throttle vs Noise")
         self._heatmap_view = pg.ImageView(view=heatmap_plot_item)
         self._heatmap_view.setColorMap(_make_thermal_colormap())
-        layout.addWidget(self._heatmap_view)
+        layout.addWidget(self._heatmap_view, 2)
 
-        self.review_tabs.addTab(tab, "🔥 Noise Heatmap")
+        # ── Changes summary (compact) ──────────────────────────────
+        self.changes_label = QLabel("No changes recommended yet.")
+        self.changes_label.setTextFormat(Qt.TextFormat.RichText)
+        self.changes_label.setWordWrap(True)
+        self.changes_label.setMaximumHeight(90)
+        self.changes_label.setStyleSheet(f"""
+            background-color: {Colors.BG_SURFACE};
+            border: 1px solid {Colors.BORDER_SUBTLE};
+            border-radius: {Radius.MD}px;
+            padding: {Spacing.SM}px;
+            color: {Colors.TEXT_SECONDARY};
+            font-size: {Typography.SIZE_CAPTION}px;
+        """)
+        layout.addWidget(self.changes_label)
+
+        # ── Action buttons ─────────────────────────────────────────
+        btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(Spacing.MD)
+
+        self.write_btn = QPushButton("✅  Apply to FC")
+        self.write_btn.setProperty("variant", "primary")
+        self.write_btn.setToolTip(
+            "Connect the FC via USB and apply these CLI changes directly."
+        )
+        self.write_btn.clicked.connect(self._write_to_fc)
+        btn_layout.addWidget(self.write_btn)
+
+        self.show_cli_btn = QPushButton("🖥  Show CLI")
+        self.show_cli_btn.setProperty("variant", "ghost")
+        self.show_cli_btn.clicked.connect(self._show_cli_popup)
+        btn_layout.addWidget(self.show_cli_btn)
+
+        self.copy_btn = QPushButton("📋  Copy to Clipboard")
+        self.copy_btn.setProperty("variant", "ghost")
+        self.copy_btn.clicked.connect(self._copy_to_clipboard)
+        btn_layout.addWidget(self.copy_btn)
+
+        btn_layout.addStretch()
+        layout.addLayout(btn_layout)
+
+    def on_enter(self):
+        self._generate_recommendations()
+        self._render_review()
+
+    def can_proceed(self) -> bool:
+        return True  # Always can proceed from export
+
+    # ── Review rendering ──────────────────────────────────────────
 
     def _render_review(self):
         analysis = self.state.analysis
@@ -221,13 +178,13 @@ class ExportPage(WizardPage):
         """Display recommendations from the Prescription Engine (pre-computed)."""
         if not self.state.has_log:
             self.changes_label.setText("Load a log first to get recommendations.")
+            self._cli_text = ""
             return
 
         # Use pre-computed results from analysis if available
         if self.state.has_analysis and self.state.analysis.cli_diff:
             diff = self.state.analysis.cli_diff
         else:
-            # Fallback: compute on the fly
             from fpv_tuner.core.diagnostics import run_diagnostics
             from fpv_tuner.core.prescription import generate_prescription
             from fpv_tuner.core.cli_diff import diff_from_prescription
@@ -252,45 +209,75 @@ class ExportPage(WizardPage):
 
         if not diff.has_changes:
             self.changes_label.setText(
-                "✅  No critical changes needed — your quad looks good! "
-                "The commands below are just a backup of your current settings."
+                "✅  No critical changes needed — your quad looks good!"
             )
-            self.cli_preview.setPlainText(
+            self._cli_text = (
                 "# No changes recommended\n"
                 "# Your current configuration looks healthy.\n"
-                "# Fly and log again to verify!"
+                "# Fly and log again to verify!\n"
             )
             return
 
-        # Rich diff summary
-        html = format_diff_html(diff)
-        self.changes_label.setText(html)
-
-        # CLI commands
-        cli_text = format_cli_commands(diff, schema=schema)
-        self.cli_preview.setPlainText(cli_text)
+        self.changes_label.setText(format_diff_html(diff))
+        self._cli_text = format_cli_commands(diff, schema=schema)
 
     # ── Actions ───────────────────────────────────────────────────
 
+    def _show_cli_popup(self):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("CLI Commands")
+        dialog.setMinimumSize(560, 480)
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(Spacing.LG, Spacing.LG, Spacing.LG, Spacing.LG)
+        layout.setSpacing(Spacing.MD)
+
+        hint = QLabel(
+            "Paste these commands into the Betaflight CLI (or use "
+            "'Apply to FC' to write them directly)."
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: {Typography.SIZE_BODY}px;")
+        layout.addWidget(hint)
+
+        editor = QPlainTextEdit()
+        editor.setReadOnly(True)
+        editor.setPlainText(self._cli_text or "# No changes yet")
+        editor.setStyleSheet(f"""
+            QPlainTextEdit {{
+                background-color: {Colors.BG_APP};
+                border: 1px solid {Colors.BORDER_SUBTLE};
+                border-radius: {Radius.MD}px;
+                padding: {Spacing.MD}px;
+                color: {Colors.ACCENT};
+                font-family: {Typography.FAMILY_MONO};
+                font-size: {Typography.SIZE_CAPTION}px;
+            }}
+        """)
+        layout.addWidget(editor, 1)
+
+        btn_row = QHBoxLayout()
+        copy_btn = QPushButton("📋  Copy")
+        copy_btn.setProperty("variant", "ghost")
+        copy_btn.clicked.connect(lambda: self._copy_text_to_clipboard(editor.toPlainText()))
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(dialog.accept)
+        btn_row.addWidget(copy_btn)
+        btn_row.addStretch()
+        btn_row.addWidget(close_btn)
+        layout.addLayout(btn_row)
+
+        dialog.exec()
+
     def _copy_to_clipboard(self):
-        from PyQt6.QtWidgets import QApplication
-        clipboard = QApplication.clipboard()
-        clipboard.setText(self.cli_preview.toPlainText())
+        self._copy_text_to_clipboard(self._cli_text)
         self.copy_btn.setText("✅  Copied!")
         from PyQt6.QtCore import QTimer
         QTimer.singleShot(2000, lambda: self.copy_btn.setText("📋  Copy to Clipboard"))
 
-    def _save_to_file(self):
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Save CLI Commands", "fpv_tuner_changes.txt",
-            "Text Files (*.txt);;All Files (*)"
-        )
-        if path:
-            with open(path, "w") as f:
-                f.write(self.cli_preview.toPlainText())
-            self.save_btn.setText("✅  Saved!")
-            from PyQt6.QtCore import QTimer
-            QTimer.singleShot(2000, lambda: self.save_btn.setText("💾  Save to File"))
+    @staticmethod
+    def _copy_text_to_clipboard(text: str):
+        from PyQt6.QtWidgets import QApplication
+        QApplication.clipboard().setText(text)
 
     # ── Write to FC ───────────────────────────────────────────────
 
@@ -302,7 +289,7 @@ class ExportPage(WizardPage):
             )
             return
 
-        port = SerialPortDialog.get_port(self, "Write Changes to FC")
+        port = SerialPortDialog.get_port(self, "Apply Changes to FC")
         if not port:
             return
 
@@ -310,14 +297,11 @@ class ExportPage(WizardPage):
             QMessageBox.warning(self, "Not Available", "Background runner unavailable.")
             return
 
-        # Only write changed/added entries (skip "removed" placeholders).
-        changes = [
-            e for e in self._diff.entries if e.kind in ("changed", "added")
-        ]
+        changes = [e for e in self._diff.entries if e.kind in ("changed", "added")]
         schema = self._schema
 
         self.write_btn.setEnabled(False)
-        self.write_btn.setText("⏳  Writing...")
+        self.write_btn.setText("⏳  Applying...")
 
         def _run(job):
             from fpv_tuner.core.serial import write_changes_to_fc
@@ -340,7 +324,7 @@ class ExportPage(WizardPage):
             )
         else:
             QMessageBox.warning(
-                self, "Write Incomplete",
+                self, "Apply Incomplete",
                 "Some changes could not be applied:\n\n"
                 + "\n".join(result.errors or ["Unknown error"]),
             )
@@ -348,10 +332,10 @@ class ExportPage(WizardPage):
     def _on_write_error(self, error_msg):
         self._reset_write_btn()
         QMessageBox.critical(
-            self, "Write Failed",
+            self, "Apply Failed",
             f"Could not write to the FC:\n\n{error_msg.splitlines()[-1] if error_msg else 'Unknown error'}",
         )
 
     def _reset_write_btn(self):
         self.write_btn.setEnabled(True)
-        self.write_btn.setText("🛰  Write to FC")
+        self.write_btn.setText("✅  Apply to FC")
