@@ -191,7 +191,7 @@ class LogPage(WizardPage):
 
     def _on_reconnect_required(self):
         self.toasts.warning(
-            "Reconnect the flight controller's USB cable to continue.", 6000
+            "Unplug and reconnect the FC USB cable to continue.", 8000
         )
 
     def _on_extract_finished(self, bbl_path, cli_data):

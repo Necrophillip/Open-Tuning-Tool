@@ -306,7 +306,7 @@ def enter_and_list_blackbox(
     mount_point = new_mounts[0]
     raw = locate_bbl_files_with_retry(mount_point, timeout=8.0)
     # Prefer a mount that has per-flight files (not just the "all" file).
-    for mp in new_mounts:
+    for mp in new_mounts[1:]:
         mp_raw = locate_bbl_files_with_retry(mp, timeout=8.0)
         if filter_blackbox_files(mp_raw):
             mount_point = mp

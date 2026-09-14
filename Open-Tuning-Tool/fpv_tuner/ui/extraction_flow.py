@@ -15,6 +15,9 @@ Flow:
       → emit finished(bbl_path, cli_data)
 """
 from PyQt6.QtCore import QObject, pyqtSignal
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class ExtractionFlow(QObject):
@@ -51,6 +54,7 @@ class ExtractionFlow(QObject):
 
     def select(self, path: str):
         """Continue with the chosen blackbox file (auto or user-selected)."""
+        logger.info("select: %s", path)
         self._bbl_path = path
         self.progress.emit("Copying blackbox file...")
         self._jobs.run(
@@ -63,35 +67,44 @@ class ExtractionFlow(QObject):
 
     def _stage_list(self, job):
         from fpv_tuner.core.serial.msc import enter_and_list_blackbox
+        logger.info("stage: listing blackbox files on %s", self._port)
         job.report_progress(30, "Entering mass-storage mode...")
         mount, files = enter_and_list_blackbox(self._port)
         self._mount = mount
+        logger.info("stage: listed %d file(s) on %s", len(files), mount)
         return files
 
     def _stage_copy(self, job, path):
         from fpv_tuner.core.serial.msc import copy_blackbox_file, eject
+        logger.info("stage: copying %s -> %s", path, self._dest)
         job.report_progress(60, "Copying blackbox file...")
         copied = copy_blackbox_file(path, self._dest)
         self._bbl_path = copied
-        eject(self._mount)
+        logger.info("stage: copied to %s; ejecting %s", copied, self._mount)
+        ejected = eject(self._mount)
+        logger.info("stage: eject result=%s", ejected)
         return copied
 
     def _stage_dump(self, job):
         from fpv_tuner.core.serial.autodetect import detect_flight_controller
         from fpv_tuner.core.serial.cli import read_dump
 
+        logger.info("stage: detecting flight controller...")
         job.report_progress(75, "Waiting for the flight controller...")
-        port = detect_flight_controller(timeout=60.0)
+        port = detect_flight_controller(timeout=120.0)
         if not port:
             raise RuntimeError(
-                "Flight controller not detected. Reconnect the USB cable and try again."
+                "Flight controller not detected. Unplug and reconnect the USB "
+                "cable, then try again."
             )
+        logger.info("stage: FC detected on %s; reading dump", port)
         job.report_progress(90, "Reading CLI dump...")
         return read_dump(port)
 
     # ── Result handlers (main thread) ─────────────────────────────
 
     def _on_listed(self, files):
+        logger.info("listed result: %d file(s)", len(files))
         if not files:
             self.failed.emit("No blackbox files found on the flight controller.")
             return
@@ -102,8 +115,11 @@ class ExtractionFlow(QObject):
         self.files_found.emit([describe_blackbox_file(f) for f in files])
 
     def _on_copied(self, _copied):
+        logger.info("copied result: %s", _copied)
         self.reconnect_required.emit()
-        self.progress.emit("Waiting for the flight controller to reconnect...")
+        self.progress.emit(
+            "Unplug and reconnect the FC USB cable to continue..."
+        )
         self._jobs.run(
             fn=self._stage_dump,
             on_result=self._on_dump,
@@ -111,8 +127,10 @@ class ExtractionFlow(QObject):
         )
 
     def _on_dump(self, cli_data):
+        logger.info("dump result: %s", "ok" if cli_data else "empty")
         self.finished.emit(self._bbl_path, cli_data)
 
     def _on_error(self, error_msg):
+        logger.error("flow error: %s", error_msg)
         tail = error_msg.splitlines()[-1] if error_msg else "Unknown error"
         self.failed.emit(tail)
