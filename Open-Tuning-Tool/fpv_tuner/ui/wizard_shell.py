@@ -121,13 +121,14 @@ class WizardShell(QWidget):
         from fpv_tuner.ui.pages.log_page import LogPage
         from fpv_tuner.ui.pages.analysis_page import AnalysisPage
         from fpv_tuner.ui.pages.diagnosis_page import DiagnosisPage
+        from fpv_tuner.ui.pages.tuning_page import TuningPage
         from fpv_tuner.ui.pages.export_page import ExportPage
         from fpv_tuner.ui.pages.iterate_page import IteratePage
 
-        page_classes = [LogPage, AnalysisPage, DiagnosisPage, ExportPage, IteratePage]
+        page_classes = [LogPage, AnalysisPage, DiagnosisPage, TuningPage, ExportPage, IteratePage]
 
         for PageClass in page_classes:
-            if PageClass in (LogPage, AnalysisPage, DiagnosisPage, ExportPage):
+            if PageClass in (LogPage, AnalysisPage, DiagnosisPage, TuningPage, ExportPage):
                 page = PageClass(self.state, self.jobs)
             else:
                 page = PageClass(self.state)

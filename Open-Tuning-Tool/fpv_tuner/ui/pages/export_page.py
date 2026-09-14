@@ -196,6 +196,10 @@ class ExportPage(WizardPage):
             prescription = generate_prescription(
                 findings, cli_settings, cli_version=cli_version,
             )
+            
+            if getattr(self.state, "tuning_recommendation", None) is not None:
+                prescription.changes.update(self.state.tuning_recommendation.prescription.changes)
+                
             diff = diff_from_prescription(cli_settings, prescription)
 
         from fpv_tuner.core.cli_diff import format_diff_html, format_cli_commands
@@ -305,8 +309,12 @@ class ExportPage(WizardPage):
 
         def _run(job):
             from fpv_tuner.core.serial import write_changes_to_fc
-            job.report_progress(30, "Connecting to FC...")
-            return write_changes_to_fc(port, changes, schema=schema)
+            job.report_progress(5, "Connecting to FC...")
+            
+            def on_progress(pct, msg):
+                job.report_progress(5 + int(pct * 0.95), msg)
+                
+            return write_changes_to_fc(port, changes, schema=schema, progress_cb=on_progress)
 
         self._jobs.run(
             fn=_run,

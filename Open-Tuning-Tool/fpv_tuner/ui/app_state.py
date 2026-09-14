@@ -88,6 +88,7 @@ class AppState(QObject):
         self.cli: Optional[CliDump] = None
         self.analysis: Optional[AnalysisResult] = None
         self.current_step: int = 0
+        self.tuning_recommendation = None  # Store PIDTuningRecommendation
 
     # ── Log session ───────────────────────────────────────────────
     def set_log(self, session: LogSession):

@@ -139,7 +139,12 @@ class CliSession:
         return self._command(f"set {name} = {value}")
 
     def save(self) -> str:
-        return self._command("save")
+        if not self._entered:
+            raise CliSessionError("Not in CLI mode — call enter() first")
+        logger.info("CLI >> save")
+        self.conn.write(b"save\n")
+        # Do not wait for a prompt here because the FC reboots and the connection drops.
+        return "save command sent (FC rebooting)"
 
     def dump(self) -> str:
         return self._command("dump")
@@ -178,6 +183,7 @@ def write_changes_to_fc(
     rateprofile: int = 0,
     baudrate: int = 115200,
     save: bool = True,
+    progress_cb=None,
 ) -> WriteResult:
     """
     Validate ``changes`` against the schema and apply them to the FC over
@@ -191,6 +197,7 @@ def write_changes_to_fc(
         rateprofile: Rate-profile index for rateprofile-scoped settings.
         baudrate:   Serial baudrate (default 115200).
         save:       Whether to issue ``save`` at the end.
+        progress_cb: Optional callback ``(percent, message)`` to report progress.
 
     Returns:
         WriteResult describing what was applied and any errors.
@@ -240,12 +247,23 @@ def write_changes_to_fc(
         ordered.append(("__rateprofile__", str(rateprofile)))
         ordered.extend(rate)
 
+    total_cmds = len(ordered) + (1 if save else 0) + 1  # +1 for enter
+    cmds_done = 0
+
+    def _report(msg: str):
+        if progress_cb:
+            pct = int((cmds_done / max(1, total_cmds)) * 100)
+            progress_cb(pct, msg)
+
     try:
         with SerialConnection(port, baudrate=baudrate) as conn:
-            cli = CliSession(conn)
+            _report("Entering CLI mode...")
+            cli = CliSession(conn, enter_timeout=5.0, command_timeout=5.0)
             result.raw_log.append(cli.enter())
+            cmds_done += 1
 
             for name, value in ordered:
+                _report(f"Applying: {name} = {value}")
                 if name == "__profile__":
                     result.raw_log.append(cli._command(f"profile {value}"))
                 elif name == "__rateprofile__":
@@ -254,10 +272,14 @@ def write_changes_to_fc(
                     resp = cli.set(name, value)
                     result.raw_log.append(resp)
                     result.applied.append(f"{name} = {value}")
+                cmds_done += 1
 
             if save:
+                _report("Saving and rebooting FC...")
                 logger.info("Saving and rebooting the FC")
                 result.raw_log.append(cli.save())
+                cmds_done += 1
+
     except (CliSessionError, SerialConnectionError) as exc:
         logger.error("Write failed: %s", exc)
         result.errors.append(str(exc))
