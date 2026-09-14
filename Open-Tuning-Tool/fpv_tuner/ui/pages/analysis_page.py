@@ -248,9 +248,10 @@ class AnalysisPage(WizardPage):
 
     def _analyze_step_responses(self, df):
         from fpv_tuner.analysis.summary import compute_step_response_summary
+        pids = self.state.cli.settings if self.state.has_cli else None
         result = {}
         for axis in ("roll", "pitch", "yaw"):
-            summary = compute_step_response_summary(df, axis)
+            summary = compute_step_response_summary(df, axis, pids=pids)
             if summary is not None:
                 result[axis] = summary
         return result

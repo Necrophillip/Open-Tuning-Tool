@@ -24,7 +24,7 @@ def analyze(df, pids, headers, context, rules=None) -> list[SubRecommendation]:
 
     recs = []
     for axis in AXES:
-        summary = compute_step_response_summary(df, axis)
+        summary = compute_step_response_summary(df, axis, pids=pids)
         if summary is None:
             continue
 

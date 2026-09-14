@@ -29,7 +29,7 @@ def _estimate_loop_hz(df: pd.DataFrame, time_col: str) -> int:
         return 4000
 
 
-def compute_step_response_summary(df: pd.DataFrame, axis_name: str):
+def compute_step_response_summary(df: pd.DataFrame, axis_name: str, pids: dict = None):
     """
     Compute a normalized step response for one axis.
 
@@ -40,14 +40,32 @@ def compute_step_response_summary(df: pd.DataFrame, axis_name: str):
     time_col = _find_time_col(df)
     rc_col = f"rcCommand[{idx}]"
     gyro_col = f"gyroADC[{idx}]"
-    if not all(c in df.columns for c in (time_col, rc_col, gyro_col)):
+    p_col = f"axisP[{idx}]"
+    
+    if time_col not in df.columns or gyro_col not in df.columns:
+        return None
+
+    # Reconstruct setpoint if rcCommand is missing but we have axisP and P gain
+    setpoint = None
+    if rc_col in df.columns:
+        setpoint = df[rc_col].to_numpy()
+    elif p_col in df.columns and pids is not None:
+        p_gain = float(pids.get(f"p_{axis_name}") or 0.0)
+        if p_gain > 0:
+            # axisP = P_gain * (Setpoint - Gyro)  =>  Setpoint = (axisP / P_gain) + Gyro
+            # Note: This is a simplification but works as a rough proxy for step response
+            axis_p_scaled = df[p_col].astype(float).to_numpy() / p_gain
+            gyro = df[gyro_col].astype(float).to_numpy()
+            setpoint = axis_p_scaled + gyro
+            
+    if setpoint is None:
         return None
 
     est_fs = _estimate_loop_hz(df, time_col)
     try:
         analysis = analyze_step_response(
             df[time_col].to_numpy(dtype=np.int64),
-            df[rc_col].to_numpy(),
+            setpoint,
             df[gyro_col].to_numpy(),
             pid_loop_hz=est_fs,
             plot=False,

@@ -164,7 +164,8 @@ class TuningPage(WizardPage):
             for k, v in self.state.cli.settings.items():
                 context_headers[k] = v
 
-        gyro_model = self.state.cli.hardware.get("gyro") if self.state.has_cli else None
+        # We don't currently parse 'status' output to get gyro_model in CliDump
+        gyro_model = None
 
         recommendation = advisor.analyze(df, pids, context_headers, gyro_model=gyro_model)
         

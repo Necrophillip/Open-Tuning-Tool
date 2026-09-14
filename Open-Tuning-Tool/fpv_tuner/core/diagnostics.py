@@ -532,7 +532,7 @@ def _check_pid_step_response(df: pd.DataFrame, cli: Optional[dict] = None) -> li
 
     findings = []
     for axis in ("roll", "pitch", "yaw"):
-        summary = compute_step_response_summary(df, axis)
+        summary = compute_step_response_summary(df, axis, pids=cli)
         if summary is None:
             continue
 
