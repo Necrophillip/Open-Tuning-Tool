@@ -4,59 +4,82 @@ import tempfile
 import os
 import glob
 import shutil
-from fpv_tuner.analysis.blackbox_parser import get_blackbox_headers, parse_pid_data_from_headers
+from fpv_tuner.analysis.blackbox_parser import (
+    get_blackbox_headers, parse_headers_csv, parse_pid_data_from_headers,
+)
+from fpv_tuner.analysis.segment_merger import merge_segments
 
-def load_log(file_path):
+
+def load_log(file_path, merge_all_segments=True):
     """
     Loads a Blackbox log file, decoding it if necessary.
-    Also parses PID data from the headers.
+    Also parses PID data and the full blackbox headers (firmware, board,
+    filters, PIDs, RPM weights, etc.) so downstream modules can tune
+    against the settings that were active *at flight time*.
+
+    Args:
+        file_path (str): Path to the log file (.csv, .bbl, .bfl).
+        merge_all_segments (bool): If True (default), merge ALL decoded segments
+                                   into a single DataFrame. If False, only use
+                                   the longest segment (old behaviour).
 
     Returns:
-        A tuple containing: (DataFrame, pids_dict, error_message)
+        A tuple containing: (DataFrame, pids_dict, headers_dict, error_message)
     """
     file_ext = os.path.splitext(file_path)[1].lower()
     temp_dir = None
+    headers = {}
 
     if file_ext == '.csv':
         csv_path = file_path
         df = _load_csv_log(csv_path)
         if df is None:
-            return None, None, "Failed to load CSV file."
+            return None, None, {}, "Failed to load CSV file."
+        headers = get_blackbox_headers(csv_path)
     elif file_ext in ['.bbl', '.bfl']:
-        temp_csv_path, temp_dir, error = _decode_blackbox_log(file_path)
+        csv_paths, temp_dir, error = _decode_blackbox_log(file_path)
         if error:
             if temp_dir and os.path.exists(temp_dir):
                 shutil.rmtree(temp_dir, ignore_errors=True)
-            return None, None, error
+            return None, None, {}, error
 
-        csv_path = temp_csv_path
-        df = _load_csv_log(csv_path)
+        if merge_all_segments and len(csv_paths) > 1:
+            print(f"Merging {len(csv_paths)} log segments...")
+            df = merge_segments(csv_paths)
+            csv_path = csv_paths[0]  # Use first segment for headers
+        else:
+            csv_path = csv_paths[0] if len(csv_paths) == 1 else _pick_longest_segment(csv_paths)
+            df = _load_csv_log(csv_path)
 
         if df is None:
             if temp_dir and os.path.exists(temp_dir):
                 shutil.rmtree(temp_dir, ignore_errors=True)
-            return None, None, "Failed to parse the decoded CSV file."
-    else:
-        return None, None, f"Unsupported file type: {file_ext}"
+            return None, None, {}, "Failed to parse the decoded CSV file."
 
-    # Parse headers and PIDs from the CSV path
-    headers = get_blackbox_headers(csv_path)
+        # Prefer the `--save-headers` output (full log-time settings).
+        header_files = sorted(glob.glob(os.path.join(temp_dir, '*.headers.csv')))
+        if header_files:
+            headers = parse_headers_csv(header_files[0])
+        else:
+            headers = get_blackbox_headers(csv_path)
+    else:
+        return None, None, {}, f"Unsupported file type: {file_ext}"
+
     pids = parse_pid_data_from_headers(headers)
 
-    # Clean up the temporary directory now that we're done with it
     if temp_dir and os.path.exists(temp_dir):
         shutil.rmtree(temp_dir, ignore_errors=True)
 
-    return df, pids, None
+    return df, pids, headers, None
 
 
 def _decode_blackbox_log(file_path):
     """
-    Decodes a binary Blackbox log file. If multiple log sessions are found,
-    it intelligently selects the longest one.
+    Decodes a binary Blackbox log file (with ``--save-headers``).
 
     Returns:
-        A tuple containing: (path_to_best_csv, temp_dir_path, error_message)
+        A tuple containing: (list_of_csv_paths, temp_dir_path, error_message)
+        The list contains ALL decoded segment CSVs found, sorted by segment index.
     """
     temp_dir = None
     try:
@@ -73,7 +96,7 @@ def _decode_blackbox_log(file_path):
     if not exe and os.path.exists(local_candidate) and os.access(local_candidate, os.X_OK):
         exe = local_candidate
 
-    command = [exe or 'blackbox_decode', file_path, '--output-dir', temp_dir]
+    command = [exe or 'blackbox_decode', file_path, '--save-headers', '--output-dir', temp_dir]
 
     try:
         print(f"Running command: {' '.join(command)}")
@@ -86,7 +109,9 @@ def _decode_blackbox_log(file_path):
         )
         print("blackbox_decode process finished.")
 
-        csv_files = glob.glob(os.path.join(temp_dir, '*.csv'))
+        csv_files = sorted(glob.glob(os.path.join(temp_dir, '*.csv')))
+        # Exclude the headers.csv files (they are not data segments).
+        csv_files = [p for p in csv_files if not p.endswith('.headers.csv')]
 
         if not csv_files:
             error_msg = ("Decoding process finished but produced no output file. "
@@ -94,35 +119,14 @@ def _decode_blackbox_log(file_path):
                          f"Stderr from blackbox_decode:\n{process.stderr}")
             return None, temp_dir, error_msg
 
-        decoded_csv_path = None
         if len(csv_files) == 1:
-            decoded_csv_path = csv_files[0]
+            print(f"Decoded 1 log session: {os.path.basename(csv_files[0])}")
         else:
-            print(f"Found {len(csv_files)} log sessions. Analyzing to find the longest one...")
-            longest_log_path = None
-            max_rows = -1
+            print(f"Found {len(csv_files)} log sessions:")
+            for p in csv_files:
+                print(f"  - {os.path.basename(p)}")
 
-            for csv_path in csv_files:
-                try:
-                    # A quick way to estimate length is by loading just one column
-                    temp_df = pd.read_csv(csv_path, header=1, usecols=[0], low_memory=False, on_bad_lines='warn')
-                    num_rows = len(temp_df)
-                    print(f" - '{os.path.basename(csv_path)}' has {num_rows} data points.")
-                    if num_rows > max_rows:
-                        max_rows = num_rows
-                        longest_log_path = csv_path
-                except Exception as e:
-                    print(f"Could not analyze {os.path.basename(csv_path)}: {e}")
-                    continue
-
-            if longest_log_path is None:
-                return None, temp_dir, "Failed to analyze multi-log sessions."
-
-            decoded_csv_path = longest_log_path
-            print(f"✅ Selected longest log session: {os.path.basename(decoded_csv_path)}")
-
-        print(f"Successfully identified log file to load: {os.path.basename(decoded_csv_path)}")
-        return decoded_csv_path, temp_dir, None
+        return csv_files, temp_dir, None
 
     except FileNotFoundError:
         error_msg = "'blackbox_decode' not found. Please ensure blackbox-tools is installed and in your system's PATH."
@@ -135,6 +139,32 @@ def _decode_blackbox_log(file_path):
         return None, temp_dir, error_msg
 
 
+def _pick_longest_segment(csv_paths):
+    """
+    Given a list of CSV segment paths, return the one with the most rows.
+    This is the legacy behaviour preserved for merge_all_segments=False.
+    """
+    longest_log_path = None
+    max_rows = -1
+
+    for csv_path in csv_paths:
+        try:
+            temp_df = pd.read_csv(csv_path, header=1, usecols=[0],
+                                  low_memory=False, on_bad_lines='warn')
+            num_rows = len(temp_df)
+            print(f"  - '{os.path.basename(csv_path)}' has {num_rows} data points.")
+            if num_rows > max_rows:
+                max_rows = num_rows
+                longest_log_path = csv_path
+        except Exception as e:
+            print(f"Could not analyze {os.path.basename(csv_path)}: {e}")
+            continue
+
+    if longest_log_path:
+        print(f"Selected longest log session: {os.path.basename(longest_log_path)}")
+    return longest_log_path or csv_paths[0]
+
+
 def _load_csv_log(file_path):
     """
     Loads a Blackbox CSV log file into a pandas DataFrame, intelligently
@@ -145,12 +175,10 @@ def _load_csv_log(file_path):
             print(f"Warning: CSV file is empty or does not exist: {file_path}")
             return None
 
-        # Inspect the first line to decide which header row to use.
-        with open(file_path, 'r', encoding='utf-8') as f:
+        with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
             first_line = f.readline()
 
         header_row = 0
-        # Betaflight logs often start with "H " for the metadata line
         if first_line.strip().startswith('H '):
             print("Detected metadata header line. Using second line as header.")
             header_row = 1

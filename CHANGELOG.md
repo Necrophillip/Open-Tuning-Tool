@@ -81,6 +81,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- 🧪 **CLI Schema Catalog (data-driven, versioned)**
+  - Valid, in-range Betaflight CLI variables generated from the firmware `settings.c` (BF 4.5 and 4.6+)
+  - Version-aware schema routing (`core/cli/catalog.py`) and validation (`core/cli/validator.py`)
+  - Legacy (pre-4.3) name normalization (`gyro_lowpass_hz` → `gyro_lpf1_static_hz`)
+  - Generator script in `tools/cli_schema/`
+
+- 🛰 **Serial Transport Layer** (`core/serial/`)
+  - Cross-platform port discovery via `pyserial`
+  - `SerialConnection` context manager with timeouts and clean error handling
+  - MSP framing + client (board version, reboot-to-mass-storage)
+  - Betaflight text-CLI session (enter/`set`/`save`)
+
+- 🚁 **Extract Blackbox from Flight Controller**
+  - Enter USB mass-storage mode via `MSP_REBOOT`, mount the flash, copy the `.BBL`
+  - Available in both the wizard (`Load Log` page) and the advanced view (File menu)
+
+- 📝 **Write Changes to FC**
+  - Apply recommended CLI changes directly to a connected FC over the CLI
+  - Schema-validated and grouped by profile scope (`profile`/`rateprofile` selectors)
+
+- 🚀 **Automated Extraction + Auto CLI Dump**
+  - One-click flow: enter MSC → choose a `.BBL` (if fragmented, excludes the "all" file)
+    → eject → reconnect prompt → auto-detect FC → read `dump` over the CLI
+  - Removed the manual CLI step from the wizard (settings are now auto-synced)
+  - "Sync Settings from FC" action for logs loaded from a file
+
+- 📈 **Review Page (Export)**
+  - Step-response plot per axis (roll/pitch/yaw) with overshoot metric
+  - Throttle-vs-noise heatmaps with axis selector
+
+- 🗂️ **Per-FC Sessions + Change Control**
+  - Sessions keyed by flight controller (`~/.fpv_tuner/sessions/<fc_id>/...`)
+  - Full CLI settings + applied changes stored per session
+  - "Revert to this session" generates rollback CLI commands
+
+- 🎯 **PID Suggestions**
+  - Step-response based P/D gain recommendations per axis (schema-clamped)
+
+### Changed
+- 🔧 Prescription engine now emits modern Betaflight 4.5+ names and validates
+  every recommendation against the CLI schema (never suggests an invalid command)
+- 🔧 `format_cli_commands` groups commands by scope and emits `profile`/`rateprofile`
+- 🔧 Wizard flow now has 5 steps (Load Log → Analysis → Diagnosis → Export → Iterate)
+
+### Fixed
+- 🐛 MSP direction bytes were swapped (`$M<` to FC vs `$M>` from FC), preventing
+  the FC from entering mass-storage mode (verified against a real SPEEDYBEEF405AIO)
+- 🐛 Betaflight CLI swallows the first command after entering CLI mode; a warm-up
+  blank line is now sent so `set`/`get` are never silently lost (verified on hardware)
+
 ### Planned Features
 - 🎯 PID Tuning Recommendations
   - AI-based gain optimization

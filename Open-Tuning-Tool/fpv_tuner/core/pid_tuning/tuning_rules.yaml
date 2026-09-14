@@ -1,0 +1,15 @@
+version: 1
+rules:
+  step_response:
+    overshoot_high: 20.0        # % overshoot -> aggressive P down / D up
+    overshoot_mid: 12.0         # % overshoot -> mild P down / D up
+    rise_time_slow: 0.20        # s -> P up
+    pid_max: 250                # schema max for p_*/d_*
+    status: heuristic_unvalidated
+  dterm_filter:
+    rms_high: 60.0              # d-term RMS (deg/s) -> tighten filtering
+    lpf_max: 1000               # schema max for dterm_lpf1_static_hz
+    reduction_factor: 0.7       # multiply current cutoff to lower it
+    status: heuristic_unvalidated
+  gyro_filter:
+    status: verified_official   # reducing LPF1 when RPM covers the band (official guidance)

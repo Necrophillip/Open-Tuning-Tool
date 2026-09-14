@@ -28,6 +28,8 @@ a = Analysis(
         'pandas',
         'numpy',
         'scipy',
+        'serial',
+        'serial.tools.list_ports',
     ],
     hookspath=[],
     hooksconfig={},

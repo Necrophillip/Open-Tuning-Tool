@@ -1,54 +1,105 @@
-def get_blackbox_headers(file_path):
-    """
-    Reads the first few lines of a decoded Blackbox CSV file to extract
-    key metadata headers.
+"""
+Blackbox header parsing.
 
-    Returns:
-        A dictionary containing the parsed header values.
+Supports two formats:
+1. ``blackbox_decode --save-headers`` output (``*.headers.csv``) — a two-column
+   CSV ``fieldname, fieldvalue`` (this is what the loader now produces).
+2. Legacy inline ``H field: value`` lines (kept for backwards compatibility).
+"""
+import csv
+
+
+def _get(headers: dict, key: str, default: str = "") -> str:
+    """Case-insensitive lookup of a header field."""
+    for k, v in headers.items():
+        if k.lower() == key.lower():
+            return v
+    return default
+
+
+def parse_headers_csv(file_path: str) -> dict:
+    """
+    Parse a ``blackbox_decode --save-headers`` ``*.headers.csv`` file.
+
+    Returns a dict of {fieldname: fieldvalue} (raw strings, original casing).
     """
     headers = {}
     try:
-        with open(file_path, 'r', encoding='utf-8') as f:
-            # Read up to the first 20 lines, which should contain all headers
-            for _ in range(20):
-                line = f.readline().strip()
+        with open(file_path, "r", newline="", encoding="utf-8", errors="replace") as f:
+            reader = csv.reader(f)
+            for row in reader:
+                if len(row) < 2:
+                    continue
+                key = row[0].strip()
+                value = row[1].strip()
+                if key and key.lower() != "fieldname":
+                    headers[key] = value
+    except Exception as e:
+        print(f"Could not read headers from {file_path}: {e}")
+    return headers
+
+
+def get_blackbox_headers(file_path):
+    """
+    Read blackbox headers from a decoded CSV.
+
+    Supports the legacy inline ``H field: value`` format.  Prefer
+    ``parse_headers_csv`` for ``--save-headers`` output.
+    """
+    headers = {}
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+            for _ in range(200):
+                line = f.readline()
                 if not line:
                     break
-
-                # Betaflight headers start with "H "
-                if line.startswith('H '):
-                    line = line[2:] # Remove the prefix
-                    if ':' in line:
-                        key, value = line.split(':', 1)
+                stripped = line.strip()
+                if stripped.startswith("H "):
+                    content = stripped[2:]
+                    if ":" in content:
+                        key, value = content.split(":", 1)
                         headers[key.strip()] = value.strip()
     except Exception as e:
         print(f"Could not read blackbox headers from {file_path}: {e}")
-
     return headers
+
+
+def _int(values, idx, default=0):
+    try:
+        return int(float(str(values[idx]).strip()))
+    except (IndexError, ValueError, TypeError):
+        return default
+
 
 def parse_pid_data_from_headers(headers):
     """
-    Parses the 'P,I,D,F' string from the headers dictionary to extract PID values.
+    Extract PID values from blackbox headers.
+
+    Reads ``rollPID``/``pitchPID``/``yawPID`` (comma-separated P,I,D) and
+    ``ff_weight`` (feedforward), plus ``d_max``/``d_min`` when present.
     """
-    pid_header = headers.get('P,I,D,F')
-    if not pid_header:
-        return {}
-
-    values = [int(v) for v in pid_header.split(',')]
     pids = {}
+    for axis in ("roll", "pitch", "yaw"):
+        raw = _get(headers, f"{axis}PID")
+        if not raw:
+            continue
+        values = raw.split(",")
+        pids[f"p_{axis}"] = _int(values, 0)
+        pids[f"i_{axis}"] = _int(values, 1)
+        pids[f"d_{axis}"] = _int(values, 2)
 
-    keys = [
-        'p_roll', 'i_roll', 'd_roll', 'f_roll',
-        'p_pitch', 'i_pitch', 'd_pitch', 'f_pitch',
-        'p_yaw', 'i_yaw', 'd_yaw', 'f_yaw'
-    ]
+    ff = _get(headers, "ff_weight")
+    if ff:
+        fv = ff.split(",")
+        for i, axis in enumerate(("roll", "pitch", "yaw")):
+            pids[f"f_{axis}"] = _int(fv, i)
 
-    # Handle cases where the header might be incomplete
-    num_values = len(values)
-    for i, key in enumerate(keys):
-        if i < num_values:
-            pids[key] = values[i]
-        else:
-            pids[key] = 0 # Default to 0 if not present
+    # D Max (4.6+) or D Min (4.5) — raw per-axis values.
+    for prefix, out in (("d_max", "d_max"), ("d_min", "d_min")):
+        raw = _get(headers, prefix)
+        if raw:
+            vals = raw.split(",")
+            for i, axis in enumerate(("roll", "pitch", "yaw")):
+                pids[f"{out}_{axis}"] = _int(vals, i)
 
     return pids

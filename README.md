@@ -79,6 +79,12 @@ Built with modern Python technologies and optimized for high-performance data vi
   - Automatic OS detection and compilation
   - Zero-configuration setup process
 
+- **🛰 Flight Controller Connectivity**
+  - Extract blackbox logs directly from the FC via USB mass-storage mode
+  - Write recommended CLI changes straight to a connected flight controller
+  - Serial device picker with live refresh
+  - Schema-validated CLI commands (Betaflight 4.5/4.6+)
+
 ---
 
 ## 🛠️ Requirements
@@ -95,6 +101,7 @@ Built with modern Python technologies and optimized for high-performance data vi
 - `pandas` - Data manipulation and analysis
 - `numpy` - Numerical computing
 - `scipy` - Scientific computing
+- `pyserial` - Serial communication with the flight controller
 
 ### External Tools
 - **blackbox-tools**: Required for binary log decoding
@@ -196,6 +203,8 @@ python3 -m fpv_tuner.main
    - Click "Open Logs" to select one or multiple Betaflight log files
    - Logs are automatically decoded and indexed
    - Status bar shows loading progress
+   - Or click **"Extract from Flight Controller"** to pull the `.BBL` directly
+     off a USB-connected FC (mass-storage mode)
 
 2. **Navigate Tabs**
    - **Trace Viewer**: Inspect raw gyro and RC data
@@ -212,6 +221,8 @@ python3 -m fpv_tuner.main
    - Use "Export" buttons to save charts
    - Generate reports for documentation
    - Share findings with your tuning team
+   - Click **"Write to FC"** to apply recommended CLI changes directly to a
+     connected flight controller (schema-validated)
 
 ---
 

@@ -3,3 +3,5 @@ pyqtgraph
 pandas
 numpy
 scipy
+pyserial
+PyYAML
