@@ -134,6 +134,7 @@ def _parse_entry(name_token: str, type_token: str, flags: str, config: str, name
 
     var_type = type_token.strip()
     datatype = TYPE_MAP.get(var_type, var_type.lower())
+    is_array = "MODE_ARRAY" in flags
 
     entry = {
         "name": name,
@@ -144,6 +145,7 @@ def _parse_entry(name_token: str, type_token: str, flags: str, config: str, name
         "max": None,
         "enum_table": None,
         "enum_values": None,
+        "is_array": is_array,
     }
 
     mm = _MINMAX_RE.search(config)

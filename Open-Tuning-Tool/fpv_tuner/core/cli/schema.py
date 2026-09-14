@@ -31,6 +31,7 @@ class CliVariable:
     default: Optional[str] = None
     enum_table: Optional[str] = None
     enum_values: Optional[list] = None
+    is_array: bool = False
 
     @property
     def is_enum(self) -> bool:
@@ -77,6 +78,7 @@ def load_schema_from_dict(data: dict) -> CliSchema:
             default=raw.get("default"),
             enum_table=raw.get("enum_table"),
             enum_values=raw.get("enum_values"),
+            is_array=raw.get("is_array", False),
         )
         schema.variables[var.name.lower()] = var
     return schema

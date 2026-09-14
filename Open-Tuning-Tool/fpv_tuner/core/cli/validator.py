@@ -49,6 +49,25 @@ def validate_value(var: CliVariable, value) -> list[str]:
     problems = []
     text = str(value).strip()
 
+    if var.is_array:
+        items = text.split(",")
+        for item in items:
+            item = item.strip()
+            if not item:
+                problems.append(f"'{var.name}' expects a comma-separated numeric array, but found an empty element in '{text}'")
+                continue
+            try:
+                num = float(item)
+            except (TypeError, ValueError):
+                problems.append(f"'{var.name}' expects a numeric array, but '{item}' is not numeric")
+                continue
+
+            if var.min is not None and num < var.min:
+                problems.append(f"'{var.name}' array item {item} is below minimum {var.min}")
+            if var.max is not None and num > var.max:
+                problems.append(f"'{var.name}' array item {item} is above maximum {var.max}")
+        return problems
+
     if var.is_enum:
         if text not in var.enum_values:
             problems.append(
@@ -88,10 +107,34 @@ def clamp_value(var: CliVariable, value) -> str:
 
     Enum and non-numeric values are returned unchanged.  Returns a string.
     """
+    text = str(value).strip()
+
+    if var.is_array:
+        items = text.split(",")
+        clamped_items = []
+        for item in items:
+            item = item.strip()
+            try:
+                num = float(item)
+            except (TypeError, ValueError):
+                clamped_items.append(item)
+                continue
+
+            if var.min is not None and num < var.min:
+                num = var.min
+            if var.max is not None and num > var.max:
+                num = var.max
+
+            if var.datatype.startswith(("uint", "int")):
+                clamped_items.append(str(int(num)))
+            else:
+                clamped_items.append(str(num))
+        return ",".join(clamped_items)
+
     try:
-        num = float(value)
+        num = float(text)
     except (TypeError, ValueError):
-        return str(value)
+        return text
 
     if var.min is not None and num < var.min:
         num = var.min

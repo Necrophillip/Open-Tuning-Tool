@@ -15,6 +15,8 @@ from fpv_tuner.core.pid_tuning.prescriptions import build_prescription
 from fpv_tuner.core.pid_tuning.step_response_pid import analyze as analyze_pid
 from fpv_tuner.core.pid_tuning.dterm_analyzer import analyze as analyze_dterm
 from fpv_tuner.core.pid_tuning.gyro_filter_analyzer import analyze as analyze_gyro_filter
+from fpv_tuner.core.pid_tuning.rpm_filter_analyzer import analyze as analyze_rpm_filter
+from fpv_tuner.core.pid_tuning.tpa_ezlanding_analyzer import analyze as analyze_tpa
 from fpv_tuner.core.cli.schema import CliSchema
 from fpv_tuner.core.cli import get_schema
 import pandas as pd
@@ -54,6 +56,8 @@ class PIDTuningAdvisor:
         sub_recommendations.extend(analyze_pid(df, pids, headers, context, rules))
         sub_recommendations.extend(analyze_dterm(df, pids, headers, context, rules))
         sub_recommendations.extend(analyze_gyro_filter(df, pids, headers, context, rules))
+        sub_recommendations.extend(analyze_rpm_filter(df, pids, headers, context, rules))
+        sub_recommendations.extend(analyze_tpa(df, pids, headers, context, rules))
 
         return build_prescription(sub_recommendations, context, self.schema)
 
