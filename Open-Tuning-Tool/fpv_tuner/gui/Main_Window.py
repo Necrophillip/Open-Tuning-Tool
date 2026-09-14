@@ -225,7 +225,8 @@ class MainWindow(QMainWindow):
         if not port:
             return
 
-        dest_dir = os.path.expanduser("~/Downloads")
+        from fpv_tuner.core.serial.msc import default_extraction_dir
+        dest_dir = default_extraction_dir()
         merge = self.merge_segments_action.isChecked()
         self.extract_action.setEnabled(False)
         status_bar = self.statusBar()

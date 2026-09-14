@@ -33,6 +33,18 @@ class MassStorageError(RuntimeError):
     """Raised when mass-storage / extraction fails."""
 
 
+def default_extraction_dir() -> str:
+    """
+    Return the default destination for extracted blackbox files.
+
+    Uses ``~/.fpv_tuner/extracted`` — a dot-directory that is writable
+    without macOS TCC prompts (unlike ``~/Downloads`` / ``~/Documents``).
+    """
+    d = Path.home() / ".fpv_tuner" / "extracted"
+    d.mkdir(parents=True, exist_ok=True)
+    return str(d)
+
+
 # ── Mount point discovery ─────────────────────────────────────────
 
 def find_mount_points() -> list[str]:

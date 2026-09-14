@@ -179,8 +179,8 @@ class LogPage(WizardPage):
         flow.failed.connect(self._on_extract_error)
         self._extract_flow = flow
 
-        flow.start(port, os.path.expanduser("~/Downloads"))
-
+        from fpv_tuner.core.serial.msc import default_extraction_dir
+        flow.start(port, default_extraction_dir())
     def _on_bbl_files_found(self, files):
         chosen = BblSelectDialog.choose(files, self)
         if chosen:
