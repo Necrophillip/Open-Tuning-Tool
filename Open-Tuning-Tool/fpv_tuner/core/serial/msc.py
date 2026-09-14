@@ -175,9 +175,22 @@ def copy_bbl_files(source_paths: list[str], dest_dir: str) -> list[str]:
     for src in source_paths:
         src_path = Path(src)
         target = dest / src_path.name
-        if target.exists():
-            target = dest / f"{src_path.stem}_{int(src_path.stat().st_mtime_ns)}{src_path.suffix}"
-        shutil.copy2(src_path, target)
+        
+        counter = 1
+        base_name = f"{src_path.stem}_{int(src_path.stat().st_mtime_ns)}"
+        while target.exists():
+            target = dest / f"{base_name}_{counter}{src_path.suffix}"
+            counter += 1
+            
+        # Use copy instead of copy2 so we don't copy macOS uchg (FAT Read-Only) flags
+        shutil.copy(src_path, target)
+        
+        # Ensure the copied file is writable by the user
+        try:
+            os.chmod(target, 0o644)
+        except OSError:
+            pass
+            
         copied.append(str(target))
     return copied
 
