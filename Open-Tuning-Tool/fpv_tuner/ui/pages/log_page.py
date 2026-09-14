@@ -107,11 +107,11 @@ class LogPage(WizardPage):
         def _load(job):
             from fpv_tuner.blackbox.loader import load_log
             job.report_progress(10, "Decoding...")
-            df, pids, error = load_log(file_path, merge_all_segments=True)
+            df, pids, headers, error = load_log(file_path, merge_all_segments=True)
             if error:
                 raise RuntimeError(error)
             job.report_progress(90, "Parsing headers...")
-            return df, pids
+            return df, pids, headers
 
         self._current_job = self._jobs.run(
             fn=_load,
@@ -121,7 +121,7 @@ class LogPage(WizardPage):
         )
 
     def _on_load_success(self, file_path, result):
-        df, pids = result
+        df, pids, headers = result
         n_rows = len(df)
 
         # Estimate duration
@@ -137,6 +137,7 @@ class LogPage(WizardPage):
             file_path=file_path,
             dataframe=df,
             pids=pids or {},
+            headers=headers or {},
             n_rows=n_rows,
             duration_s=duration_s,
         )

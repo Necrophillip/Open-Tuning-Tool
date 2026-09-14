@@ -269,8 +269,8 @@ class MainWindow(QMainWindow):
         if cli_data is not None:
             self.app_state.set_cli(make_cli_dump(cli_data))
         self._set_status("Loading extracted log...")
-        df, pids, error = load_log(bbl_path, merge_all_segments=merge)
-        self.on_load_finished(bbl_path, df, pids, error)
+        df, pids, headers, error = load_log(bbl_path, merge_all_segments=merge)
+        self.on_load_finished(bbl_path, df, pids, headers, error)
         self.on_all_loads_finished()
 
     def _extract_failed(self, message):
@@ -372,11 +372,11 @@ class MainWindow(QMainWindow):
 
         self.jobs.run(fn=_run, on_result=_done, on_error=_error)
 
-    def on_load_finished(self, file_path, df, pids, error):
+    def on_load_finished(self, file_path, df, pids, headers, error):
         if error:
             QMessageBox.critical(self, "Error Loading File", f"Failed to load {os.path.basename(file_path)}:\n\n{error}")
         else:
-            self.loaded_logs[file_path] = {'df': df, 'pids': pids}
+            self.loaded_logs[file_path] = {'df': df, 'pids': pids, 'headers': headers}
             item = QListWidgetItem(os.path.basename(file_path))
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
             item.setCheckState(Qt.CheckState.Checked)

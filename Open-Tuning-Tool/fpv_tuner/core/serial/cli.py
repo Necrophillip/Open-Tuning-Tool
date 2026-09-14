@@ -308,3 +308,26 @@ def read_dump(
 
     logger.info("read_dump: parsed %d settings, version=%s", len(data.settings), data.version)
     return data
+
+
+def read_status(
+    port: str,
+    baudrate: int = 115200,
+    enter_timeout: float = 3.0,
+    status_timeout: float = 5.0,
+) -> str:
+    """
+    Connect to the FC, enter the CLI, and run ``status``.
+
+    Returns the raw ``status`` output (used to extract the gyro model and
+    other live hardware info).
+    """
+    logger.info("read_status: port=%s", port)
+    with SerialConnection(port, baudrate=baudrate) as conn:
+        cli = CliSession(conn, enter_timeout=enter_timeout, command_timeout=status_timeout)
+        cli.enter()
+        try:
+            raw = cli._command("status")
+        finally:
+            cli.exit()
+    return raw

@@ -12,7 +12,7 @@ Pure Python, no Qt.  Provides:
 from fpv_tuner.core.serial.ports import SerialPortInfo, SerialPortError, list_serial_ports
 from fpv_tuner.core.serial.connection import SerialConnection, SerialConnectionError
 from fpv_tuner.core.serial.msp import MspClient, MspError, encode_msp, decode_msp, MSP_REBOOT_MSC
-from fpv_tuner.core.serial.cli import CliSession, CliSessionError, WriteResult, write_changes_to_fc, read_dump
+from fpv_tuner.core.serial.cli import CliSession, CliSessionError, WriteResult, write_changes_to_fc, read_dump, read_status
 from fpv_tuner.core.serial.autodetect import is_flight_controller, detect_flight_controller
 from fpv_tuner.core.serial.msc import (
     MassStorageError,
@@ -44,6 +44,7 @@ __all__ = [
     "WriteResult",
     "write_changes_to_fc",
     "read_dump",
+    "read_status",
     "is_flight_controller",
     "detect_flight_controller",
     "MassStorageError",

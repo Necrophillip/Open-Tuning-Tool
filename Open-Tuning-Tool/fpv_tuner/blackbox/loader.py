@@ -4,13 +4,18 @@ import tempfile
 import os
 import glob
 import shutil
-from fpv_tuner.analysis.blackbox_parser import get_blackbox_headers, parse_pid_data_from_headers
+from fpv_tuner.analysis.blackbox_parser import (
+    get_blackbox_headers, parse_headers_csv, parse_pid_data_from_headers,
+)
 from fpv_tuner.analysis.segment_merger import merge_segments
+
 
 def load_log(file_path, merge_all_segments=True):
     """
     Loads a Blackbox log file, decoding it if necessary.
-    Also parses PID data from the headers.
+    Also parses PID data and the full blackbox headers (firmware, board,
+    filters, PIDs, RPM weights, etc.) so downstream modules can tune
+    against the settings that were active *at flight time*.
 
     Args:
         file_path (str): Path to the log file (.csv, .bbl, .bfl).
@@ -19,54 +24,58 @@ def load_log(file_path, merge_all_segments=True):
                                    the longest segment (old behaviour).
 
     Returns:
-        A tuple containing: (DataFrame, pids_dict, error_message)
+        A tuple containing: (DataFrame, pids_dict, headers_dict, error_message)
     """
     file_ext = os.path.splitext(file_path)[1].lower()
     temp_dir = None
+    headers = {}
 
     if file_ext == '.csv':
         csv_path = file_path
         df = _load_csv_log(csv_path)
         if df is None:
-            return None, None, "Failed to load CSV file."
+            return None, None, {}, "Failed to load CSV file."
+        headers = get_blackbox_headers(csv_path)
     elif file_ext in ['.bbl', '.bfl']:
         csv_paths, temp_dir, error = _decode_blackbox_log(file_path)
         if error:
             if temp_dir and os.path.exists(temp_dir):
                 shutil.rmtree(temp_dir, ignore_errors=True)
-            return None, None, error
+            return None, None, {}, error
 
         if merge_all_segments and len(csv_paths) > 1:
-            # Merge all segments into one continuous DataFrame
             print(f"Merging {len(csv_paths)} log segments...")
             df = merge_segments(csv_paths)
             csv_path = csv_paths[0]  # Use first segment for headers
         else:
-            # Legacy behaviour: pick the longest segment
             csv_path = csv_paths[0] if len(csv_paths) == 1 else _pick_longest_segment(csv_paths)
             df = _load_csv_log(csv_path)
 
         if df is None:
             if temp_dir and os.path.exists(temp_dir):
                 shutil.rmtree(temp_dir, ignore_errors=True)
-            return None, None, "Failed to parse the decoded CSV file."
-    else:
-        return None, None, f"Unsupported file type: {file_ext}"
+            return None, None, {}, "Failed to parse the decoded CSV file."
 
-    # Parse headers and PIDs from the CSV path
-    headers = get_blackbox_headers(csv_path)
+        # Prefer the `--save-headers` output (full log-time settings).
+        header_files = sorted(glob.glob(os.path.join(temp_dir, '*.headers.csv')))
+        if header_files:
+            headers = parse_headers_csv(header_files[0])
+        else:
+            headers = get_blackbox_headers(csv_path)
+    else:
+        return None, None, {}, f"Unsupported file type: {file_ext}"
+
     pids = parse_pid_data_from_headers(headers)
 
-    # Clean up the temporary directory now that we're done with it
     if temp_dir and os.path.exists(temp_dir):
         shutil.rmtree(temp_dir, ignore_errors=True)
 
-    return df, pids, None
+    return df, pids, headers, None
 
 
 def _decode_blackbox_log(file_path):
     """
-    Decodes a binary Blackbox log file.
+    Decodes a binary Blackbox log file (with ``--save-headers``).
 
     Returns:
         A tuple containing: (list_of_csv_paths, temp_dir_path, error_message)
@@ -87,7 +96,7 @@ def _decode_blackbox_log(file_path):
     if not exe and os.path.exists(local_candidate) and os.access(local_candidate, os.X_OK):
         exe = local_candidate
 
-    command = [exe or 'blackbox_decode', file_path, '--output-dir', temp_dir]
+    command = [exe or 'blackbox_decode', file_path, '--save-headers', '--output-dir', temp_dir]
 
     try:
         print(f"Running command: {' '.join(command)}")
@@ -101,6 +110,8 @@ def _decode_blackbox_log(file_path):
         print("blackbox_decode process finished.")
 
         csv_files = sorted(glob.glob(os.path.join(temp_dir, '*.csv')))
+        # Exclude the headers.csv files (they are not data segments).
+        csv_files = [p for p in csv_files if not p.endswith('.headers.csv')]
 
         if not csv_files:
             error_msg = ("Decoding process finished but produced no output file. "
@@ -164,12 +175,10 @@ def _load_csv_log(file_path):
             print(f"Warning: CSV file is empty or does not exist: {file_path}")
             return None
 
-        # Inspect the first line to decide which header row to use.
-        with open(file_path, 'r', encoding='utf-8') as f:
+        with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
             first_line = f.readline()
 
         header_row = 0
-        # Betaflight logs often start with "H " for the metadata line
         if first_line.strip().startswith('H '):
             print("Detected metadata header line. Using second line as header.")
             header_row = 1
