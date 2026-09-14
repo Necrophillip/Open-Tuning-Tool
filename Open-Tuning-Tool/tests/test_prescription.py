@@ -35,27 +35,5 @@ class TestPrescription(unittest.TestCase):
         rx = generate_prescription([], cli_settings=None, cli_version="4.5.0")
         self.assertEqual(rx.changes, [])
 
-    def test_pid_suggestion_overshoot(self):
-        findings = [Finding(
-            severity=Severity.WARNING, category=Category.PID, title="SR", explanation="",
-            data={"axis": "roll", "axis_name": "Roll", "overshoot_pct": 25.0, "rise_time_s": None},
-        )]
-        rx = generate_prescription(findings, {"p_roll": "45", "d_roll": "30"}, cli_version="4.5.0")
-        by_name = {c.setting: c for c in rx.changes}
-        self.assertIn("p_roll", by_name)
-        self.assertLess(int(by_name["p_roll"].new_value), 45)
-        self.assertGreater(int(by_name["d_roll"].new_value), 30)
-
-    def test_pid_suggestion_slow_rise(self):
-        findings = [Finding(
-            severity=Severity.WARNING, category=Category.PID, title="SR", explanation="",
-            data={"axis": "pitch", "axis_name": "Pitch", "overshoot_pct": 0.0, "rise_time_s": 0.3},
-        )]
-        rx = generate_prescription(findings, {"p_pitch": "47", "d_pitch": "32"}, cli_version="4.5.0")
-        by_name = {c.setting: c for c in rx.changes}
-        self.assertIn("p_pitch", by_name)
-        self.assertGreater(int(by_name["p_pitch"].new_value), 47)
-
-
 if __name__ == "__main__":
     unittest.main()

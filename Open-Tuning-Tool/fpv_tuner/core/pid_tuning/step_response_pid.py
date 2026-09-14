@@ -9,18 +9,19 @@ from __future__ import annotations
 from fpv_tuner.analysis.summary import compute_step_response_summary
 from fpv_tuner.core.pid_tuning.models import SubRecommendation
 from fpv_tuner.core.pid_tuning.helpers import clamp_int
+from fpv_tuner.core.pid_tuning.rule_engine import rget, rstatus
 
 AXES = ("roll", "pitch", "yaw")
 
-# Heuristic thresholds (see plan §3 — not official Betaflight).
-OVERSHOOT_HIGH = 20.0
-OVERSHOOT_MID = 12.0
-RISE_TIME_SLOW = 0.20
-PID_MAX = 250  # schema max for p_*/d_* (verified 0-250)
 
-
-def analyze(df, pids, headers, context) -> list[SubRecommendation]:
+def analyze(df, pids, headers, context, rules=None) -> list[SubRecommendation]:
     """Produce P/D gain suggestions per axis from step-response metrics."""
+    overshoot_high = rget(rules, "step_response", "overshoot_high", 20.0)
+    overshoot_mid = rget(rules, "step_response", "overshoot_mid", 12.0)
+    rise_time_slow = rget(rules, "step_response", "rise_time_slow", 0.20)
+    pid_max = rget(rules, "step_response", "pid_max", 250)
+    status = rstatus(rules, "step_response")
+
     recs = []
     for axis in AXES:
         summary = compute_step_response_summary(df, axis)
@@ -34,22 +35,22 @@ def analyze(df, pids, headers, context) -> list[SubRecommendation]:
         d_cur = int(pids.get(f"d_{axis}") or 30)
         p_new, d_new = p_cur, d_cur
 
-        if overshoot > OVERSHOOT_HIGH:
+        if overshoot > overshoot_high:
             p_new = int(p_cur * 0.90)
             d_new = int(d_cur * 1.10)
             reason = f"Overshoot {overshoot:.0f}% on {axis} — reduce P and increase D."
-        elif overshoot > OVERSHOOT_MID:
+        elif overshoot > overshoot_mid:
             p_new = int(p_cur * 0.95)
             d_new = int(d_cur * 1.05)
             reason = f"Overshoot {overshoot:.0f}% on {axis} — slightly reduce P and increase D."
-        elif rise_time is not None and rise_time > RISE_TIME_SLOW:
+        elif rise_time is not None and rise_time > rise_time_slow:
             p_new = int(p_cur * 1.10)
             reason = f"Slow rise time ({rise_time * 1000:.0f} ms) on {axis} — increase P."
         else:
             continue
 
-        p_new = clamp_int(p_new, 0, PID_MAX)
-        d_new = clamp_int(d_new, 0, PID_MAX)
+        p_new = clamp_int(p_new, 0, pid_max)
+        d_new = clamp_int(d_new, 0, pid_max)
 
         changes = {}
         if p_new != p_cur:
@@ -62,7 +63,7 @@ def analyze(df, pids, headers, context) -> list[SubRecommendation]:
                 kind="pid",
                 changes=changes,
                 reasoning=reason,
-                rule_status="heuristic_unvalidated",
+                rule_status=status,
                 confidence=0.5,
             ))
     return recs

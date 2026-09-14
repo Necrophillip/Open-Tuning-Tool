@@ -12,9 +12,7 @@ import numpy as np
 from fpv_tuner.core.pid_tuning.models import SubRecommendation
 from fpv_tuner.core.pid_tuning.helpers import hget, parse_int, clamp_int
 from fpv_tuner.core.pid_tuning.tuning_context import FLAG_REDUCES_FILTERING_BLOCKED
-
-DTERM_RMS_HIGH = 60.0   # [HEURÍSTICA] D-term RMS (°/s) above which filtering is tightened
-LPF_MAX = 1000          # verified (0-1000)
+from fpv_tuner.core.pid_tuning.rule_engine import rget, rstatus
 
 
 def _dterm_rms(df) -> float:
@@ -25,14 +23,19 @@ def _dterm_rms(df) -> float:
     return float(np.sqrt(np.mean(data ** 2)))
 
 
-def analyze(df, pids, headers, context) -> list[SubRecommendation]:
+def analyze(df, pids, headers, context, rules=None) -> list[SubRecommendation]:
+    rms_high = rget(rules, "dterm_filter", "rms_high", 60.0)
+    lpf_max = rget(rules, "dterm_filter", "lpf_max", 1000)
+    reduction_factor = rget(rules, "dterm_filter", "reduction_factor", 0.7)
+    status = rstatus(rules, "dterm_filter")
+
     rms = _dterm_rms(df)
-    if rms < DTERM_RMS_HIGH:
+    if rms < rms_high:
         return []
 
     current = parse_int(hget(headers, "dterm_lpf1_static_hz"), 0)
     # Lower cutoff == more filtering.  Never raise (never reduce filtering).
-    target = clamp_int(int(current * 0.7), 0, LPF_MAX)
+    target = clamp_int(int(current * reduction_factor), 0, lpf_max)
 
     if target >= current:
         # Already at the filtering floor — any change would reduce filtering.
@@ -54,6 +57,6 @@ def analyze(df, pids, headers, context) -> list[SubRecommendation]:
             f"D-term RMS is {rms:.0f} °/s — lower dterm_lpf1_static_hz "
             f"{current}→{target} Hz to add filtering."
         ),
-        rule_status="heuristic_unvalidated",
+        rule_status=status,
         confidence=0.6,
     )]

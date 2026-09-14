@@ -401,7 +401,6 @@ ALL_PRESCRIPTIONS = [
     _prescribe_frame_resonance,
     _prescribe_throttle_coupling,
     _prescribe_filter_improvement,
-    _prescribe_pid,
 ]
 
 

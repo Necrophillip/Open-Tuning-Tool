@@ -19,9 +19,11 @@ from fpv_tuner.core.pid_tuning.tuning_context import (
     FLAG_REDUCES_FILTERING_BLOCKED,
 )
 from fpv_tuner.core.pid_tuning.rpm_filter import is_rpm_filter_active
+from fpv_tuner.core.pid_tuning.rule_engine import rstatus
 
 
-def analyze(df, pids, headers, context) -> list[SubRecommendation]:
+def analyze(df, pids, headers, context, rules=None) -> list[SubRecommendation]:
+    status = rstatus(rules, "gyro_filter", "verified_official")
     current = parse_int(hget(headers, "gyro_lpf1_static_hz"), 0)
     if current <= 0:
         return []  # already disabled
@@ -47,7 +49,7 @@ def analyze(df, pids, headers, context) -> list[SubRecommendation]:
             f"RPM filter active — disable gyro LPF1 ({current}→0 Hz) to remove "
             f"unnecessary filter delay."
         ),
-        rule_status="verified_official",
+        rule_status=status,
         confidence=0.7,
         safety_flags=[FLAG_REDUCES_FILTERING_RPM_COMPENSATED],
     )]
