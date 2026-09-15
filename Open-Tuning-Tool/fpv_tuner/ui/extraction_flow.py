@@ -87,7 +87,7 @@ class ExtractionFlow(QObject):
 
     def _stage_dump(self, job):
         from fpv_tuner.core.serial.autodetect import detect_flight_controller
-        from fpv_tuner.core.serial.cli import read_dump
+        from fpv_tuner.core.serial.cli import read_dump_and_status
 
         logger.info("stage: detecting flight controller...")
         job.report_progress(75, "Waiting for the flight controller...")
@@ -97,9 +97,9 @@ class ExtractionFlow(QObject):
                 "Flight controller not detected. Unplug and reconnect the USB "
                 "cable, then try again."
             )
-        logger.info("stage: FC detected on %s; reading dump", port)
-        job.report_progress(90, "Reading CLI dump...")
-        return read_dump(port)
+        logger.info("stage: FC detected on %s; reading dump + status", port)
+        job.report_progress(90, "Reading CLI dump + status...")
+        return read_dump_and_status(port)
 
     # ── Result handlers (main thread) ─────────────────────────────
 
@@ -126,9 +126,10 @@ class ExtractionFlow(QObject):
             on_error=self._on_error,
         )
 
-    def _on_dump(self, cli_data):
-        logger.info("dump result: %s", "ok" if cli_data else "empty")
-        self.finished.emit(self._bbl_path, cli_data)
+    def _on_dump(self, result):
+        cli_data, status_raw = result
+        logger.info("dump result: %s, status: %d bytes", "ok" if cli_data else "empty", len(status_raw))
+        self.finished.emit(self._bbl_path, (cli_data, status_raw))
 
     def _on_error(self, error_msg):
         logger.error("flow error: %s", error_msg)

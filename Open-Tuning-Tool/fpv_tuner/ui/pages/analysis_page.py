@@ -147,7 +147,8 @@ class AnalysisPage(WizardPage):
 
             # Task 6: Noise heatmaps (per axis) for the review page
             job.report_progress(99, "Building noise heatmaps...")
-            results["heatmaps"] = self._analyze_heatmaps(df)
+            results["heatmaps"] = self._analyze_heatmaps(df, col_prefix="gyroADC")
+            results["dterm_heatmaps"] = self._analyze_heatmaps(df, col_prefix="axisD")
             job.report_progress(100, "Analysis complete")
 
             return results
@@ -224,7 +225,7 @@ class AnalysisPage(WizardPage):
         nperseg = min(256, len(df) // 4)
         tc, fb, hm = calculate_throttle_noise_heatmap(
             df[noise_col], throttle, df[time_col],
-            n_throttle_bins=20, n_freq_bins=64, nperseg=nperseg,
+            n_throttle_bins=80, n_freq_bins=256, nperseg=nperseg,
         )
         if tc is not None:
             return {
@@ -256,11 +257,19 @@ class AnalysisPage(WizardPage):
                 result[axis] = summary
         return result
 
-    def _analyze_heatmaps(self, df):
+    def _analyze_heatmaps(self, df, col_prefix="gyroADC"):
         from fpv_tuner.analysis.summary import compute_noise_heatmap
+        
+        motor_poles = 14
+        if self.state.has_cli and self.state.cli.settings:
+            try:
+                motor_poles = int(self.state.cli.settings.get("motor_poles", 14))
+            except ValueError:
+                pass
+                
         result = {}
         for axis in ("roll", "pitch", "yaw"):
-            heatmap = compute_noise_heatmap(df, axis)
+            heatmap = compute_noise_heatmap(df, axis, col_prefix=col_prefix, motor_poles=motor_poles)
             if heatmap is not None:
                 result[axis] = heatmap
         return result
@@ -365,6 +374,7 @@ class AnalysisPage(WizardPage):
             session_id=session_id,
             step_responses=results.get("step_responses", {}),
             heatmaps=results.get("heatmaps", {}),
+            dterm_heatmaps=results.get("dterm_heatmaps", {}),
         ))
         self.validity_changed.emit()
 

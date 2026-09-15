@@ -12,7 +12,7 @@ from fpv_tuner.core.pid_tuning.tuning_context import TuningContext, RuleStatus
 @dataclass
 class SubRecommendation:
     """One atomic recommendation (PID gains, one filter group, etc.)."""
-    kind: Literal["pid", "dterm_filter", "gyro_filter", "rpm_filter", "tpa", "ezlanding"]
+    kind: Literal["pid", "dterm_filter", "gyro_filter", "rpm_filter", "tpa", "ezlanding", "safety_gate"]
     changes: dict                        # {param: value}
     reasoning: str = ""
     rule_status: RuleStatus = "heuristic_unvalidated"

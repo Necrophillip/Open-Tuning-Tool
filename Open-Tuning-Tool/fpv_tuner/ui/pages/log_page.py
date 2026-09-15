@@ -36,11 +36,36 @@ class LogPage(WizardPage):
         layout.setSpacing(Spacing.LG)
 
         layout.addWidget(self._make_title("Load your Blackbox log"))
-        layout.addWidget(self._make_subtitle(
-            "Drag & drop your .BBL or .BFL file below. If the log contains "
-            "multiple flight sessions, they will be merged automatically."
-        ))
-
+        layout.addWidget(self._make_subtitle("Selecciona tu misión de tuning actual y carga el log correspondiente:"))
+        from PyQt6.QtWidgets import QButtonGroup, QRadioButton
+        self.mission_group = QButtonGroup(self)
+        mission_layout = QHBoxLayout()
+        self.btn_filters = QRadioButton("🚀 Fase 1: Filtros\n(Log: Throttle Sweeps)")
+        self.btn_pids = QRadioButton("🕹️ Fase 2: PIDs y FF\n(Log: Flips/Rolls Acro)")
+        self.btn_comp = QRadioButton("🔧 Fase 3: Toques Finales\n(Log: Vuelo Acrobático)")
+        self.btn_filters.setChecked(True)
+        self.state.tuning_mode = "FILTERS"
+        for idx, btn in enumerate([self.btn_filters, self.btn_pids, self.btn_comp]):
+            btn.setStyleSheet(f"""
+                QRadioButton {{
+                    font-size: 14px;
+                    padding: 10px;
+                    border: 1px solid {Colors.BORDER_SUBTLE};
+                    border-radius: 8px;
+                    background: {Colors.BG_SURFACE};
+                }}
+                QRadioButton:checked {{
+                    border-color: {Colors.ACCENT};
+                    background: {Colors.ACCENT_MUTED};
+                }}
+            """)
+            self.mission_group.addButton(btn, idx)
+            mission_layout.addWidget(btn)
+        def _on_mission_changed(idx):
+            modes = ["FILTERS", "PIDS", "COMPLEMENTARY"]
+            self.state.tuning_mode = modes[idx]
+        self.mission_group.idClicked.connect(_on_mission_changed)
+        layout.addLayout(mission_layout)
         self.dropzone = DropZone(
             title="Drop your blackbox log here",
             subtitle=".bbl, .bfl or .csv  —  or click to browse",
@@ -148,7 +173,7 @@ class LogPage(WizardPage):
         secs = int(duration_s % 60)
         self.dropzone.set_success(basename, f"{n_rows:,} samples")
         self.info_card.setText(
-            f"✅  {basename}  —  {n_rows:,} samples, "
+            f"✓ {basename} — {n_rows:,} samples, "
             f"{mins}m {secs}s of flight data"
         )
         self.info_card.show()
@@ -173,7 +198,7 @@ class LogPage(WizardPage):
         self.info_card.hide()
 
         flow = ExtractionFlow(self._jobs, self)
-        flow.progress.connect(lambda msg: self._set_extract_status(f"⏳  {msg}"))
+        flow.progress.connect(lambda msg: self._set_extract_status(f"⧖ {msg}"))
         flow.files_found.connect(self._on_bbl_files_found)
         flow.reconnect_required.connect(self._on_reconnect_required)
         flow.finished.connect(self._on_extract_finished)
@@ -195,13 +220,18 @@ class LogPage(WizardPage):
             "Unplug and reconnect the FC USB cable to continue.", 8000
         )
 
-    def _on_extract_finished(self, bbl_path, cli_data):
-        # Store the auto-extracted CLI dump.
-        if cli_data is not None:
-            self.state.set_cli(make_cli_dump(cli_data))
+    def _on_extract_finished(self, bbl_path, cli_result):
+        # Store the auto-extracted CLI dump + status.
+        if cli_result is not None:
+            if isinstance(cli_result, tuple):
+                cli_data, status_raw = cli_result
+            else:
+                cli_data, status_raw = cli_result, ""
+            self.state.set_cli(make_cli_dump(cli_data, status_raw=status_raw))
+            gyro_info = f", gyro={self.state.cli.gyro_model}" if self.state.cli.gyro_model else ""
             self.toasts.success(
                 f"CLI dump loaded — BF {cli_data.version or '?'} "
-                f"({len(cli_data.settings)} settings)"
+                f"({len(cli_data.settings)} settings{gyro_info})"
             )
         self._reset_extract_buttons()
         # Load the extracted blackbox log through the normal pipeline.
@@ -210,7 +240,7 @@ class LogPage(WizardPage):
     def _on_extract_error(self, error_msg: str):
         self._reset_extract_buttons()
         self.info_card.setText(
-            f"❌  Extraction failed: {error_msg}"
+            f"✕ Extraction failed: {error_msg}"
         )
         self.info_card.setStyleSheet(f"""
             background-color: {Colors.DANGER_MUTED};
@@ -247,12 +277,12 @@ class LogPage(WizardPage):
             return
 
         self.sync_btn.setEnabled(False)
-        self.toasts.info("Reading CLI dump from the flight controller...")
+        self.toasts.info("Reading CLI dump + status from the flight controller...")
 
         def _run(job):
-            from fpv_tuner.core.serial.cli import read_dump
+            from fpv_tuner.core.serial.cli import read_dump_and_status
             job.report_progress(30, "Connecting to FC...")
-            return read_dump(port)
+            return read_dump_and_status(port)
 
         self._jobs.run(
             fn=_run,
@@ -260,15 +290,17 @@ class LogPage(WizardPage):
             on_error=lambda e: self._on_sync_error(e, None),
         )
 
-    def _on_sync_done(self, cli_data):
+    def _on_sync_done(self, result):
         self.sync_btn.setEnabled(True)
+        cli_data, status_raw = result
         if cli_data.errors:
             self.toasts.error("; ".join(cli_data.errors))
             return
-        self.state.set_cli(make_cli_dump(cli_data))
+        self.state.set_cli(make_cli_dump(cli_data, status_raw=status_raw))
+        gyro_info = f", gyro={self.state.cli.gyro_model}" if self.state.cli.gyro_model else ""
         self.toasts.success(
             f"CLI dump loaded — BF {cli_data.version or '?'} "
-            f"({len(cli_data.settings)} settings)"
+            f"({len(cli_data.settings)} settings{gyro_info})"
         )
 
     def _on_sync_error(self, error_msg, _):
@@ -282,7 +314,7 @@ class LogPage(WizardPage):
             basename = os.path.basename(self.state.log.file_path)
             self.dropzone.set_success(basename)
             self.info_card.setText(
-                f"✅  {basename}  —  {self.state.log.n_rows:,} samples"
+                f"✓ {basename} — {self.state.log.n_rows:,} samples"
             )
             self.info_card.show()
 

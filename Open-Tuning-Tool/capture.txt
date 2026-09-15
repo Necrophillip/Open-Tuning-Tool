@@ -1,0 +1,126 @@
+=== STATUS ===
+status
+MCU: STM32F405xx CLK=168MHz (PLLP-HSE), Vref=3.28V, Core temp=51degC
+STACK: 2048b (0x1000fff0)
+CONFIG: CONFIGURED (3971b / 16384b)
+
+DEVICES DETECTED: SPI=1, I2C=1 (0 errors)
+GYRO: (1) ICM42688P enabled locked dma
+ACC: ICM42688P
+BARO: DPS310
+GPS: NOT ENABLED
+OSD: MAX7456 (30 x 13)
+FLASH: JEDEC ID=0x00ef4017 8M
+
+BUILD KEY: 90c9f83138f4c3edd38befb195c43310 (2026.6.1)
+
+System Uptime: 2014 seconds
+CPU:35%, cycle time: 126, GYRO rate: 7955, RX rate: 0, System rate: 10
+Voltage: 0.01V (0S battery - NOT PRESENT)
+Arming disable flags: RXLOSS CLI DSHOT_TELEM
+
+# 
+=== GET GYRO ===
+get gyro
+gyro_hardware_lpf = NORMAL
+Allowed values: NORMAL, OPTION_1, OPTION_2, EXPERIMENTAL
+
+gyro_lpf1_type = PT1
+Allowed values: PT1, BIQUAD, PT2, PT3
+
+gyro_lpf1_static_hz = 250
+Allowed range: 0 - 1000
+
+gyro_lpf2_type = PT1
+Allowed values: PT1, BIQUAD, PT2, PT3
+
+gyro_lpf2_static_hz = 500
+Allowed range: 0 - 1000
+
+gyro_notch1_hz = 170
+Allowed range: 0 - 1000
+Default value: 0
+
+gyro_notch1_cutoff = 144
+Allowed range: 0 - 1000
+Default value: 0
+
+gyro_notch2_hz = 232
+Allowed range: 0 - 1000
+Default value: 0
+
+gyro_notch2_cutoff = 197
+Allowed range: 0 - 1000
+Default value: 0
+
+gyro_calib_duration = 125
+Allowed range: 50 - 3000
+
+gyro_calib_noise_limit = 48
+Allowed range: 0 - 200
+
+gyro_offset_yaw = 0
+Allowed range: -1000 - 1000
+
+gyro_overflow_detect = ALL
+Allowed values: OFF, YAW, ALL
+
+gyro_lpf1_dyn_min_hz = 100
+Allowed range: 0 - 1000
+Default value: 250
+
+gyro_lpf1_dyn_max_hz = 500
+Allowed range: 0 - 1000
+
+gyro_lpf1_dyn_expo = 5
+Allowed range: 0 - 10
+
+gyro_filte
+=== SENSOR HARDWARE ===
+r_debug_axis = ROLL
+Allowed values: ROLL, PITCH, YAW
+
+blackbox_disable_gyro = OFF
+Allowed values: OFF, ON
+
+blackbox_disable_gyrounfilt = OFF
+Allowed values: OFF, ON
+
+gyro_cal_on_first_arm = OFF
+Allowed values: OFF, ON
+
+simplified_gyro_filter = ON
+Allowed values: OFF, ON
+
+simplified_gyro_filter_multiplier = 100
+Allowed range: 10 - 200
+
+crsf_tlm_accgyro = OFF
+Allowed values: OFF, ON
+
+gyro_1_bustype = SPI
+Allowed values: NONE, I2C, SPI, SLAVE
+
+gyro_1_spibus = 1
+Allowed range: 0 - 3
+
+gyro_1_i2cBus = 0
+Allowed range: 0 - 3
+
+gyro_1_i2c_address = 0
+Allowed range: 0 - 119
+
+# sensor_hardware
+gyro: NONE,AUTO,MPU6050,L3GD20,MPU6000,MPU6500,MPU9250,ICM20601,ICM20602,ICM20608G,ICM20649,ICM20689,ICM42605,ICM42688P,BMI160,BMI270,LSM6DSO,LSM6DSV16X,IIM42653,ICM45605,ICM45686,ICM40609D,IIM42652,LSM6DSK320X,ICM42622P,ICM42686P,VIRTUAL
+acc: AUTO,NONE,MPU6050,MPU6000,MPU6500,MPU9250,ICM20601,ICM20602,ICM20608G,ICM20649,ICM20689,ICM42605,ICM42688P,BMI160,BMI270,LSM6DSO,LSM6DSV16X,IIM42653,IC
+=== GET SENSOR HARDWARE ===
+M45605,ICM45686,ICM40609D,IIM42652,LSM6DSK320X,ICM42622P,ICM42686P,VIRTUAL
+baro: AUTO,NONE,BMP085,MS5611,BMP280,LPS,QMP6988,BMP388,DPS310,2SMPB_02B,LPS22DF,BMP580,BMP581,VIRTUAL,SPA06_003
+mag: AUTO,NONE,HMC5883,AK8975,AK8963,QMC5883L,LIS2MDL,LIS3MDL,MPU925X_AK8963,IST8310,MMC560X,QMC5883P
+rangefinder: NONE,HCSR04,TFMINI,TF02,MTF01,MTF02,MTF01P,MTF02P,TFNOVA,NOOPLOOP_F2,NOOPLOOP_F2P,NOOPLOOP_F2PH,NOOPLOOP_F,NOOPLOOP_FP,NOOPLOOP_F2MINI,UPT1
+opticalflow: NONE,MT,UPT1
+
+# get sensor_hardware
+###ERROR IN get: INVALID NAME: sensor_hardware###
+
+# 

@@ -56,6 +56,9 @@ def _detect_key(version: Optional[str]) -> str:
         # Pre-4.x firmware uses a completely different CLI namespace;
         # fall back to the latest so callers at least get modern names.
         return DEFAULT_KEY
+    if major >= 2025:
+        # CalVer (2025.x, 2026.x) maps to the latest schema
+        return DEFAULT_KEY
     for prefix, key in _VERSION_ROUTING:
         pm = _VERSION_RE.match(prefix)
         if pm and major == int(pm.group(1)) and minor <= int(pm.group(2)):

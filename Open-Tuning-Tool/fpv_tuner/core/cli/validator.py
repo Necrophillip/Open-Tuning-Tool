@@ -22,6 +22,17 @@ LEGACY_ALIASES = {
     "dterm_lowpass_hz": "dterm_lpf1_static_hz",
     "dterm_lowpass2_hz": "dterm_lpf2_static_hz",
     "dterm_lowpass_type": "dterm_lpf1_type",
+    # 4.5 -> 4.6 renames
+    "d_min_roll": "d_max_roll",
+    "d_min_pitch": "d_max_pitch",
+    "d_min_yaw": "d_max_yaw",
+    "simplified_dmax_gain": "simplified_d_max_gain",
+}
+
+# Known metadata for MODE_ARRAY variables that the schema generator misses.
+_ARRAY_METADATA = {
+    "rpm_filter_weights": {"min": 0, "max": 100, "length": 3},
+    "motor_output_limit": {"min": 0, "max": 100, "length": 1},
 }
 
 
@@ -50,7 +61,15 @@ def validate_value(var: CliVariable, value) -> list[str]:
     text = str(value).strip()
 
     if var.is_array:
+        meta = _ARRAY_METADATA.get(var.name, {})
+        effective_min = var.min if var.min is not None else meta.get("min")
+        effective_max = var.max if var.max is not None else meta.get("max")
+        expected_len = meta.get("length")
+        
         items = text.split(",")
+        if expected_len and len(items) != expected_len:
+            problems.append(f"'{var.name}' expects {expected_len} elements, got {len(items)}")
+
         for item in items:
             item = item.strip()
             if not item:
@@ -62,10 +81,10 @@ def validate_value(var: CliVariable, value) -> list[str]:
                 problems.append(f"'{var.name}' expects a numeric array, but '{item}' is not numeric")
                 continue
 
-            if var.min is not None and num < var.min:
-                problems.append(f"'{var.name}' array item {item} is below minimum {var.min}")
-            if var.max is not None and num > var.max:
-                problems.append(f"'{var.name}' array item {item} is above maximum {var.max}")
+            if effective_min is not None and num < effective_min:
+                problems.append(f"'{var.name}' array item {item} is below minimum {effective_min}")
+            if effective_max is not None and num > effective_max:
+                problems.append(f"'{var.name}' array item {item} is above maximum {effective_max}")
         return problems
 
     if var.is_enum:
@@ -110,6 +129,10 @@ def clamp_value(var: CliVariable, value) -> str:
     text = str(value).strip()
 
     if var.is_array:
+        meta = _ARRAY_METADATA.get(var.name, {})
+        effective_min = var.min if var.min is not None else meta.get("min")
+        effective_max = var.max if var.max is not None else meta.get("max")
+        
         items = text.split(",")
         clamped_items = []
         for item in items:
@@ -120,10 +143,10 @@ def clamp_value(var: CliVariable, value) -> str:
                 clamped_items.append(item)
                 continue
 
-            if var.min is not None and num < var.min:
-                num = var.min
-            if var.max is not None and num > var.max:
-                num = var.max
+            if effective_min is not None and num < effective_min:
+                num = effective_min
+            if effective_max is not None and num > effective_max:
+                num = effective_max
 
             if var.datatype.startswith(("uint", "int")):
                 clamped_items.append(str(int(num)))

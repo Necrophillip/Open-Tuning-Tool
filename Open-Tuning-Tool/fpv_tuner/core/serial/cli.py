@@ -353,3 +353,45 @@ def read_status(
         finally:
             cli.exit()
     return raw
+
+
+def read_dump_and_status(
+    port: str,
+    baudrate: int = 115200,
+    enter_timeout: float = 3.0,
+    dump_timeout: float = 15.0,
+    retries: int = 2,
+) -> tuple:
+    """
+    Read both ``dump`` and ``status`` from the FC in a single CLI session.
+
+    Avoids opening/closing the serial port twice.  The ``status`` command
+    runs after ``dump`` succeeds, using a shorter timeout since it is fast.
+
+    Returns ``(CliDumpData, status_raw_text)``.
+    """
+    from fpv_tuner.core.cli_dump import parse_dump
+
+    data = None
+    status_raw = ""
+    for attempt in range(retries + 1):
+        logger.info("read_dump_and_status: port=%s (attempt %d)", port, attempt + 1)
+        with SerialConnection(port, baudrate=baudrate) as conn:
+            cli = CliSession(conn, enter_timeout=enter_timeout, command_timeout=dump_timeout)
+            cli.enter()
+            try:
+                raw_dump = cli.dump()
+                # status is fast — use a shorter timeout
+                cli.command_timeout = 5.0
+                status_raw = cli._command("status")
+            finally:
+                cli.exit()
+        data = parse_dump(raw_dump)
+        if data.settings:
+            break
+        logger.warning("read_dump_and_status: empty dump (attempt %d); retrying", attempt + 1)
+        time.sleep(1.0)
+
+    logger.info("read_dump_and_status: %d settings, version=%s, status=%d bytes",
+                len(data.settings), data.version, len(status_raw))
+    return data, status_raw

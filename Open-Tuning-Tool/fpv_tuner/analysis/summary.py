@@ -11,6 +11,7 @@ import pandas as pd
 
 from fpv_tuner.analysis.step_response import analyze_step_response
 from fpv_tuner.analysis.noise import calculate_throttle_noise_heatmap
+from fpv_tuner.analysis.harmonics import compute_motor_harmonics
 
 AXES = ("roll", "pitch", "yaw")
 
@@ -62,6 +63,10 @@ def compute_step_response_summary(df: pd.DataFrame, axis_name: str, pids: dict =
         return None
 
     est_fs = _estimate_loop_hz(df, time_col)
+    
+    motor_cols = [c for c in df.columns if c.startswith("motor[") and "]" in c]
+    motor_signals = [df[c].to_numpy() for c in motor_cols] if motor_cols else None
+    
     try:
         analysis = analyze_step_response(
             df[time_col].to_numpy(dtype=np.int64),
@@ -70,6 +75,7 @@ def compute_step_response_summary(df: pd.DataFrame, axis_name: str, pids: dict =
             pid_loop_hz=est_fs,
             plot=False,
             return_fit_curve=True,
+            motor_signals=motor_signals,
         )
     except Exception:
         return None
@@ -103,16 +109,16 @@ def compute_step_response_summary(df: pd.DataFrame, axis_name: str, pids: dict =
     }
 
 
-def compute_noise_heatmap(df: pd.DataFrame, axis_name: str, n_throttle_bins: int = 24,
-                          n_freq_bins: int = 64):
+def compute_noise_heatmap(df: pd.DataFrame, axis_name: str, n_throttle_bins: int = 80,
+                          n_freq_bins: int = 256, col_prefix: str = "gyroADC", motor_poles: int = 14):
     """
-    Compute a throttle-vs-noise heatmap for one gyro axis.
+    Compute a throttle-vs-noise heatmap for a given signal prefix (gyroADC, axisD, etc).
 
     Returns ``{"throttle", "freq", "heatmap"}`` or None.
     """
     idx = AXES.index(axis_name)
     time_col = _find_time_col(df)
-    noise_col = f"gyroADC[{idx}]"
+    noise_col = f"{col_prefix}[{idx}]"
     throttle_col = next((c for c in df.columns if "rccommand" in c.lower() and "3" in c), None)
     if throttle_col is None:
         throttle_col = next((c for c in df.columns if c == "motor[0]"), None)
@@ -121,11 +127,14 @@ def compute_noise_heatmap(df: pd.DataFrame, axis_name: str, n_throttle_bins: int
         return None
 
     raw = df[throttle_col].astype(float)
-    mn, mx = raw.min(), raw.max()
-    if mx > mn:
-        throttle = (raw - mn) / (mx - mn) * 100.0
+    if raw.max() > 1000:
+        throttle = ((raw - 1000) / 1000.0 * 100.0).clip(0, 100)
     else:
-        throttle = pd.Series(np.full(len(raw), 50.0), index=raw.index)
+        mn, mx = raw.min(), raw.max()
+        if mx > mn:
+            throttle = (raw - mn) / (mx - mn) * 100.0
+        else:
+            throttle = pd.Series(np.full(len(raw), 50.0), index=raw.index)
 
     nperseg = min(256, max(64, len(df) // 4))
     tc, fb, hm = calculate_throttle_noise_heatmap(
@@ -134,4 +143,38 @@ def compute_noise_heatmap(df: pd.DataFrame, axis_name: str, n_throttle_bins: int
     )
     if tc is None or hm is None:
         return None
-    return {"throttle": tc, "freq": fb, "heatmap": hm}
+        
+    result = {"throttle": tc, "freq": fb, "heatmap": hm}
+    
+    # Overlay Harmonics calculation
+    harmonics_df = compute_motor_harmonics(df, motor_poles, time_col)
+    if harmonics_df is not None:
+        # Group harmonics into the exact same throttle bins
+        import pandas as pd
+        valid_idx = throttle.notna() & harmonics_df['h1_hz'].notna()
+        t_clean = throttle[valid_idx].values
+        
+        if len(t_clean) > 0:
+            bins = np.linspace(0.0, 100.0, len(tc) + 1)
+            bin_indices = np.digitize(t_clean, bins) - 1
+            bin_indices = np.clip(bin_indices, 0, len(tc) - 1)
+            
+            df_h = pd.DataFrame({'bin': bin_indices})
+            for h_col, key in [('h1_hz', 'h1'), ('h2_hz', 'h2'), ('h3_hz', 'h3')]:
+                df_h[key] = harmonics_df[h_col][valid_idx].values
+                
+            mean_h = df_h.groupby('bin').mean()
+            
+            for key in ['h1', 'h2', 'h3']:
+                binned_h = np.full(len(tc), np.nan)
+                for b_idx in mean_h.index:
+                    binned_h[b_idx] = mean_h.at[b_idx, key]
+                
+                # Interpolate missing bins
+                mask = np.isnan(binned_h)
+                if not mask.all():
+                    binned_h[mask] = np.interp(np.flatnonzero(mask), np.flatnonzero(~mask), binned_h[~mask])
+                    
+                result[key] = binned_h
+
+    return result

@@ -3,6 +3,6 @@
   "gyro_version_gate": {
     "42652": "2026.6"
   },
-  "debug_mode_chirp_values": [],
+  "debug_mode_chirp_values": [19],
   "note": "Team-maintained config. 'gyro_version_gate' maps a gyro-model substring to the minimum firmware version that safely supports it (older versions yield a blocking warning). 'debug_mode_chirp_values' lists numeric debug_mode values that mean CHIRP (populate once verified per firmware)."
 }

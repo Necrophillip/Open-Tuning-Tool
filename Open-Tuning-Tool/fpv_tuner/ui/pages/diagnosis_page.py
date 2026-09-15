@@ -128,8 +128,8 @@ class DiagnosisPage(WizardPage):
         self.findings_container = QWidget()
         self.findings_layout = QVBoxLayout(self.findings_container)
         self.findings_layout.setSpacing(Spacing.MD)
-        self.findings_layout.setContentsMargins(0, 0, 0, 0)
-        self.findings_layout.addStretch()
+        self.findings_layout.setContentsMargins(0, 0, 0, Spacing.XL)
+        self.findings_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
         scroll.setWidget(self.findings_container)
         layout.addWidget(scroll, 1)
@@ -148,7 +148,7 @@ class DiagnosisPage(WizardPage):
         from fpv_tuner.core.diagnostics import Severity
 
         # Clear old findings
-        while self.findings_layout.count() > 1:  # Keep the stretch
+        while self.findings_layout.count() > 0:
             item = self.findings_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
@@ -190,7 +190,7 @@ class DiagnosisPage(WizardPage):
                 "",
             )
 
-        self.findings_layout.insertWidget(0, summary_card)
+        self.findings_layout.addWidget(summary_card)
 
         # Add finding cards
         all_cards = [summary_card]
@@ -201,7 +201,7 @@ class DiagnosisPage(WizardPage):
                 f.explanation,
                 f.recommendation,
             )
-            self.findings_layout.insertWidget(self.findings_layout.count() - 1, card)
+            self.findings_layout.addWidget(card)
             all_cards.append(card)
 
         # Stagger reveal animation

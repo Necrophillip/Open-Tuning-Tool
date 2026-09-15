@@ -34,11 +34,12 @@ def _has_scroll_area(widget) -> bool:
 # ── Wizard step definitions ──────────────────────────────────────
 
 WIZARD_STEPS = [
-    {"title": "Load Log",    "subtitle": "Drop a blackbox log file"},
-    {"title": "Analysis",    "subtitle": "Automatic noise analysis"},
-    {"title": "Diagnosis",   "subtitle": "What we found"},
-    {"title": "Export",      "subtitle": "Get your new configuration"},
-    {"title": "Iterate",     "subtitle": "Fly, log, repeat"},
+    {"title": "Cargar",      "subtitle": "Blackbox log"},
+    {"title": "Análisis",    "subtitle": "Procesamiento matemático"},
+    {"title": "Diagnóstico", "subtitle": "Filtros y Ruido"},
+    {"title": "Tuning",      "subtitle": "PIDs y Feedforward"},
+    {"title": "Exportar",    "subtitle": "Obtén la configuración"},
+    {"title": "Iterar",      "subtitle": "Vuela, loguea, repite"},
 ]
 
 
@@ -212,12 +213,22 @@ class WizardShell(QWidget):
     # ── Navigation ────────────────────────────────────────────────
 
     def _go_next(self):
-        if self._current_step < len(WIZARD_STEPS) - 1:
-            self._go_to_step(self._current_step + 1)
+        step = self._current_step + 1
+        if self.state.tuning_mode == "FILTERS" and step == 3:
+            step = 4
+        if self.state.tuning_mode in ("PIDS", "COMPLEMENTARY") and step == 2:
+            step = 3
+        if step < len(WIZARD_STEPS):
+            self._go_to_step(step)
 
     def _go_back(self):
-        if self._current_step > 0:
-            self._go_to_step(self._current_step - 1)
+        step = self._current_step - 1
+        if self.state.tuning_mode == "FILTERS" and step == 3:
+            step = 2
+        if self.state.tuning_mode in ("PIDS", "COMPLEMENTARY") and step == 2:
+            step = 1
+        if step >= 0:
+            self._go_to_step(step)
 
     def _on_step_clicked(self, index: int):
         # Can only navigate to unlocked steps

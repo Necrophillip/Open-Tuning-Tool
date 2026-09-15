@@ -12,6 +12,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt
 
 import pyqtgraph as pg
+import numpy as np
 
 from fpv_tuner.ui.pages.base_page import WizardPage
 from fpv_tuner.ui.app_state import AppState
@@ -22,7 +23,11 @@ from fpv_tuner.ui.theme import Colors, Spacing, Radius, Typography
 def _make_thermal_colormap():
     positions = [0.0, 0.25, 0.5, 0.75, 1.0]
     colors = [
-        (0, 0, 0), (128, 0, 0), (255, 100, 0), (255, 255, 0), (255, 255, 255),
+        (0, 0, 0),        # Black
+        (128, 0, 0),      # Dark Red
+        (255, 100, 0),    # Orange
+        (255, 255, 0),    # Yellow
+        (255, 255, 255)   # White
     ]
     return pg.ColorMap(positions, colors)
 
@@ -49,9 +54,23 @@ class ExportPage(WizardPage):
         super().__init__(state, parent)
 
     def _build_ui(self):
-        layout = QVBoxLayout(self)
+        from PyQt6.QtWidgets import QScrollArea, QFrame, QWidget
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setStyleSheet("QScrollArea { background: transparent; } QWidget#scroll_content { background: transparent; }")
+        
+        content = QWidget()
+        content.setObjectName("scroll_content")
+        layout = QVBoxLayout(content)
         layout.setContentsMargins(Spacing.LG, Spacing.MD, Spacing.LG, Spacing.MD)
         layout.setSpacing(Spacing.SM)
+        
+        scroll.setWidget(content)
+        main_layout.addWidget(scroll)
 
         layout.addWidget(self._make_title("Export & Apply"))
         layout.addWidget(self._make_subtitle(
@@ -72,25 +91,63 @@ class ExportPage(WizardPage):
             plot.setDownsampling(auto=True, mode="peak")
             self._step_plots[axis] = plot
             step_row.addWidget(plot)
-        layout.addLayout(step_row, 3)
+        layout.addLayout(step_row, 2)
 
-        # ── Noise heatmap ──────────────────────────────────────────
-        layout.addWidget(_section_label("🔥  Noise Heatmap"))
-        heat_controls = QHBoxLayout()
-        heat_controls.addWidget(QLabel("Axis:"))
-        self._heatmap_axis_combo = QComboBox()
-        self._heatmap_axis_combo.addItems(["roll", "pitch", "yaw"])
-        self._heatmap_axis_combo.currentTextChanged.connect(self._render_heatmap)
-        heat_controls.addWidget(self._heatmap_axis_combo)
-        heat_controls.addStretch()
-        layout.addLayout(heat_controls)
+        # ── Gyro Noise Heatmap ─────────────────────────────────────
+        layout.addWidget(_section_label("🔥 Gyro Noise Heatmap"))
+        gyro_row = QHBoxLayout()
+        gyro_row.setSpacing(Spacing.SM)
+        self._gyro_views = {}
+        for axis in ("roll", "pitch", "yaw"):
+            plot_item = pg.PlotItem(title="")
+            plot_item.setLabel("bottom", "Throttle (%)")
+            plot_item.setLabel("left", "Frequency (Hz)")
+            view = pg.ImageView(view=plot_item)
+            view.setColorMap(_make_thermal_colormap())
+            view.ui.histogram.hide()
+            view.ui.roiBtn.hide()
+            view.ui.menuBtn.hide()
+            view.setMinimumHeight(200)
+            view.getView().invertY(False)
+            self._gyro_views[axis] = view
+            gyro_row.addWidget(view)
+        layout.addLayout(gyro_row, 2)
 
-        heatmap_plot_item = pg.PlotItem()
-        heatmap_plot_item.setLabel("bottom", "Throttle (%)")
-        heatmap_plot_item.setLabel("left", "Frequency (Hz)")
-        self._heatmap_view = pg.ImageView(view=heatmap_plot_item)
-        self._heatmap_view.setColorMap(_make_thermal_colormap())
-        layout.addWidget(self._heatmap_view, 2)
+        # ── D-Term Noise Heatmap ───────────────────────────────────
+        layout.addWidget(_section_label("🔥 D-Term Noise Heatmap"))
+        dterm_row = QHBoxLayout()
+        dterm_row.setSpacing(Spacing.SM)
+        self._dterm_views = {}
+        for axis in ("roll", "pitch", "yaw"):
+            plot_item = pg.PlotItem(title="")
+            plot_item.setLabel("bottom", "Throttle (%)")
+            plot_item.setLabel("left", "Frequency (Hz)")
+            view = pg.ImageView(view=plot_item)
+            view.setColorMap(_make_thermal_colormap())
+            view.ui.histogram.hide()
+            view.ui.roiBtn.hide()
+            view.ui.menuBtn.hide()
+            view.setMinimumHeight(200)
+            view.getView().invertY(False)
+            self._dterm_views[axis] = view
+            dterm_row.addWidget(view)
+        layout.addLayout(dterm_row, 2)
+
+        # ── RPM Filter Harmonics ───────────────────────────────────
+        layout.addWidget(_section_label("🎵 RPM Filter Harmonics"))
+        harm_row = QHBoxLayout()
+        harm_row.setSpacing(Spacing.SM)
+        self._harm_plots = {}
+        for axis in ("roll", "pitch", "yaw"):
+            plot = pg.PlotWidget()
+            plot.setTitle(axis.capitalize())
+            plot.setLabel("bottom", "Throttle (%)")
+            plot.setLabel("left", "Frequency (Hz)")
+            plot.showGrid(x=True, y=True, alpha=0.2)
+            plot.setMinimumHeight(200)
+            self._harm_plots[axis] = plot
+            harm_row.addWidget(plot)
+        layout.addLayout(harm_row, 2)
 
         # ── Changes summary (compact) ──────────────────────────────
         self.changes_label = QLabel("No changes recommended yet.")
@@ -137,12 +194,13 @@ class ExportPage(WizardPage):
         self._render_review()
 
     def can_proceed(self) -> bool:
-        return True  # Always can proceed from export
-
-    # ── Review rendering ──────────────────────────────────────────
+        return True
 
     def _render_review(self):
         analysis = self.state.analysis
+        if not analysis:
+            return
+            
         step_responses = analysis.step_responses if analysis else {}
         for axis, plot in self._step_plots.items():
             plot.clear()
@@ -157,20 +215,77 @@ class ExportPage(WizardPage):
             if data.get("overshoot_pct") is not None:
                 title += f"  ·  {data['overshoot_pct']:.0f}% overshoot"
             plot.setTitle(title)
-        self._render_heatmap()
+            
+        gyro_heatmaps = getattr(analysis, "heatmaps", {})
+        dterm_heatmaps = getattr(analysis, "dterm_heatmaps", {})
+        
+        self._update_heatmaps(self._gyro_views, gyro_heatmaps)
+        self._update_heatmaps(self._dterm_views, dterm_heatmaps)
+        self._render_harmonics(self._harm_plots, gyro_heatmaps)
 
-    def _render_heatmap(self):
-        analysis = self.state.analysis
-        heatmaps = analysis.heatmaps if analysis else {}
-        axis = self._heatmap_axis_combo.currentText()
-        data = heatmaps.get(axis)
-        if data is None:
-            return
-        hm = data["heatmap"]
-        tr = pg.QtGui.QTransform()
-        tr.scale(100.0 / hm.shape[1], data["freq"][-1] / hm.shape[0])
-        self._heatmap_view.setImage(hm, autoRange=False, transform=tr)
-        self._heatmap_view.getView().setTitle(f"Throttle vs Noise — {axis.capitalize()}")
+    def _update_heatmaps(self, views, heatmaps):
+        for axis, view in views.items():
+            view.getView().clear()
+            data = heatmaps.get(axis)
+            if not data:
+                view.getView().setTitle(f"{axis.capitalize()} (No data)")
+                view.clear()
+                continue
+                
+            view.getView().setTitle("")
+            hm = data["heatmap"]
+            img = hm.T
+            freq_max = data["freq"][-1]
+            
+            tr = pg.QtGui.QTransform()
+            tr.scale(100.0 / img.shape[0], freq_max / img.shape[1])
+            
+            v_min, v_max = np.nanmin(img), np.nanpercentile(img, 99.5)
+            if np.isnan(v_max) or v_min == v_max: v_max = v_min + 1
+            
+            view.setImage(img, autoRange=False, levels=(v_min, v_max), transform=tr)
+            
+            mean_val = np.nanmean(img)
+            peak_val = np.nanmax(img)
+            
+            axis_label = pg.TextItem(axis, color=(255, 255, 255), anchor=(0, 0))
+            axis_label.setPos(2, freq_max - (freq_max * 0.05))
+            view.getView().addItem(axis_label)
+            
+            stats_label = pg.TextItem(f"mean={mean_val:.3f}\npeak={peak_val:.3f}", color=(255, 255, 255), anchor=(1, 0))
+            stats_label.setPos(98, freq_max - (freq_max * 0.05))
+            view.getView().addItem(stats_label)
+            
+            view.getView().setLimits(xMin=0, xMax=100, yMin=0, yMax=freq_max)
+            view.getView().setXRange(0, 100, padding=0)
+            view.getView().setYRange(0, freq_max, padding=0)
+            
+            x_ax = view.getView().getAxis("bottom")
+            x_ax.setTicks([[(i, str(i)) for i in range(0, 101, 20)]])
+            y_ax = view.getView().getAxis("left")
+            y_ax.setTicks([[(i, str(i)) for i in range(0, int(freq_max) + 1, 200)]])
+
+    def _render_harmonics(self, plots, heatmaps):
+        for axis, plot in plots.items():
+            plot.clear()
+            data = heatmaps.get(axis)
+            if not data or "h1" not in data:
+                plot.setTitle(f"{axis.capitalize()} (No data)")
+                continue
+                
+            plot.setTitle(f"{axis.capitalize()}")
+            tc = data["throttle"]
+            colors = ["#00ffff", "#ffaa00", "#ffff00"]
+            names = ["H1 (Fundamental)", "H2 (2x)", "H3 (3x)"]
+            
+            for i, h_key in enumerate(["h1", "h2", "h3"]):
+                if h_key in data:
+                    plot.plot(tc, data[h_key], name=names[i], pen=pg.mkPen(colors[i], width=2))
+                    
+            freq_max = data["freq"][-1]
+            plot.setLimits(xMin=0, xMax=100, yMin=0, yMax=freq_max)
+            plot.setXRange(0, 100, padding=0)
+            plot.setYRange(0, freq_max, padding=0)
 
     # ── Recommendation generation ─────────────────────────────────
 

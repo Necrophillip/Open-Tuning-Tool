@@ -37,10 +37,19 @@ class CliDump:
     target: str = ""                # e.g. "F405"
     board_name: str = ""            # e.g. "SPEEDYBEEF405AIO"
     manufacturer_id: str = ""       # e.g. "SPBE"
+    status_raw: str = ""            # raw 'status' CLI output
+    gyro_model: str = ""            # parsed from status (e.g. "BMI270")
 
 
-def make_cli_dump(data) -> CliDump:
+def make_cli_dump(data, status_raw: str = "") -> CliDump:
     """Build a CliDump from a ``CliDumpData`` (core.cli_dump)."""
+    gyro = data.settings.get("gyro_1_sensor")
+    if not gyro and status_raw:
+        from fpv_tuner.core.pid_tuning.version_gyro_guard import parse_status_gyro
+        gyro = parse_status_gyro(status_raw)
+        
+    gyro = str(gyro).strip().upper() if gyro else ""
+
     return CliDump(
         raw_text=data.raw_text,
         version=data.version,
@@ -49,6 +58,8 @@ def make_cli_dump(data) -> CliDump:
         target=getattr(data, "target", ""),
         board_name=getattr(data, "board_name", ""),
         manufacturer_id=getattr(data, "manufacturer_id", ""),
+        status_raw=status_raw,
+        gyro_model=gyro,
     )
 
 
@@ -64,7 +75,8 @@ class AnalysisResult:
     session_id: str = ""                                # saved session ID
     # Review page data (step response + noise heatmaps per axis)
     step_responses: dict = field(default_factory=dict)  # axis -> summary dict
-    heatmaps: dict = field(default_factory=dict)        # axis -> heatmap dict
+    heatmaps: dict = field(default_factory=dict)
+    dterm_heatmaps: dict = field(default_factory=dict)        # axis -> heatmap dict
 
 
 class AppState(QObject):
@@ -88,6 +100,7 @@ class AppState(QObject):
         self.cli: Optional[CliDump] = None
         self.analysis: Optional[AnalysisResult] = None
         self.current_step: int = 0
+        self.tuning_mode: str = "ALL"  # FILTERS, PIDS, COMPLEMENTARY, or ALL
         self.tuning_recommendation = None  # Store PIDTuningRecommendation
 
     # ── Log session ───────────────────────────────────────────────

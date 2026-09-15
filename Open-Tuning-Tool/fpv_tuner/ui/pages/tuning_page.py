@@ -118,8 +118,8 @@ class TuningPage(WizardPage):
         self.cards_container = QWidget()
         self.cards_layout = QVBoxLayout(self.cards_container)
         self.cards_layout.setSpacing(Spacing.MD)
-        self.cards_layout.setContentsMargins(0, 0, 0, 0)
-        self.cards_layout.addStretch()
+        self.cards_layout.setContentsMargins(0, 0, 0, Spacing.XL)
+        self.cards_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
         scroll.setWidget(self.cards_container)
         layout.addWidget(scroll, 1)
@@ -134,16 +134,16 @@ class TuningPage(WizardPage):
         return True
 
     def _show_empty(self, msg):
-        while self.cards_layout.count() > 1:
+        while self.cards_layout.count() > 0:
             item = self.cards_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
         label = QLabel(msg)
         label.setStyleSheet(f"color: {Colors.TEXT_SECONDARY};")
-        self.cards_layout.insertWidget(0, label)
+        self.cards_layout.addWidget(label)
 
     def _generate_recommendations(self):
-        while self.cards_layout.count() > 1:
+        while self.cards_layout.count() > 0:
             item = self.cards_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
@@ -164,16 +164,39 @@ class TuningPage(WizardPage):
             for k, v in self.state.cli.settings.items():
                 context_headers[k] = v
 
-        # We don't currently parse 'status' output to get gyro_model in CliDump
-        gyro_model = None
-
-        recommendation = advisor.analyze(df, pids, context_headers, gyro_model=gyro_model)
+        gyro_model = self.state.cli.gyro_model if self.state.has_cli else None
+        
+        recommendation = advisor.analyze(df, pids, context_headers, gyro_model=gyro_model, mode=self.state.tuning_mode)
         
         # Save to state so ExportPage can use it
         self.state.tuning_recommendation = recommendation
 
+        from fpv_tuner.core.pid_tuning.tuning_context import BLOCKING_FLAGS
+        _FLAG_DESCRIPTIONS = {
+            "version_mismatch": "⛔ Firmware version not in whitelist — CLI auto-apply blocked.",
+            "gyro_unknown_conservative_mode": "⚠️ Gyro model unknown (no FC status available) — conservative mode.",
+            "chirp_unsupported": "⛔ Chirp/Autotune log detected — PID suggestions blocked.",
+            "reduces_filtering_blocked": "⛔ Cannot reduce D-term filtering — hard safety clamp.",
+            "sliders_active_conflict": "⚠️ Simplified Tuning Sliders active — raw CLI values may be overwritten.",
+        }
+
         all_cards = []
-        if not recommendation.sub_recommendations:
+        
+        # Show safety gate cards first
+        if recommendation.context and recommendation.context.warnings:
+            for flag in recommendation.context.warnings:
+                is_blocking = flag in BLOCKING_FLAGS
+                card = RecommendationCard(
+                    kind="safety_gate",
+                    reasoning=_FLAG_DESCRIPTIONS.get(flag, flag),
+                    changes={},
+                    rule_status="verified_official",
+                    safety_flags=[flag],
+                )
+                self.cards_layout.addWidget(card)
+                all_cards.append(card)
+
+        if not recommendation.sub_recommendations and not all_cards:
             self._show_empty("No tuning changes suggested. Your tune looks solid!")
             return
 
@@ -185,7 +208,7 @@ class TuningPage(WizardPage):
                 rule_status=sub.rule_status,
                 safety_flags=sub.safety_flags,
             )
-            self.cards_layout.insertWidget(self.cards_layout.count() - 1, card)
+            self.cards_layout.addWidget(card)
             all_cards.append(card)
 
         reveal_cards(all_cards, stagger_ms=60)

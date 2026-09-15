@@ -13,3 +13,10 @@ rules:
     status: heuristic_unvalidated
   gyro_filter:
     status: verified_official   # reducing LPF1 when RPM covers the band (official guidance)
+  ez_landing:
+    base_rate: 10               # minimum tpa_low_rate to apply if bounce is detected
+    max_rate: 60                # hard cap for tpa_low_rate
+    bounce_multiplier: 2.5      # tpa_low_rate = base_rate + (bounce_rms * multiplier)
+    status: heuristic_unvalidated
+  dyn_notch:
+    status: heuristic_unvalidated

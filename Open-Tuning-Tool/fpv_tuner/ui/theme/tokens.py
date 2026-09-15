@@ -11,10 +11,10 @@ class Colors:
     """Color palette — dark theme tuned for long tuning sessions."""
 
     # ── Backgrounds (darkest → lightest) ──────────────────────────
-    BG_APP = "#0B0E14"          # App window background
-    BG_SURFACE = "#131720"      # Cards, panels
-    BG_ELEVATED = "#1A1F2B"     # Raised elements (hover, dropdowns)
-    BG_OVERLAY = "#222939"      # Highest elevation (popovers)
+    BG_APP = "#0F172A"          # App window background
+    BG_SURFACE = "#192134"      # Cards, panels
+    BG_ELEVATED = "#1E293B"     # Raised elements (hover, dropdowns)
+    BG_OVERLAY = "#334155"      # Highest elevation (popovers)
 
     # ── Borders ───────────────────────────────────────────────────
     BORDER_SUBTLE = "#232A38"   # Default hairline borders
@@ -26,10 +26,10 @@ class Colors:
     TEXT_DISABLED = "#5A6376"   # Disabled / placeholder
 
     # ── Accent (brand) ────────────────────────────────────────────
-    ACCENT = "#4CC2FF"          # Primary actions, links, active step
-    ACCENT_HOVER = "#6FCFFF"
-    ACCENT_PRESSED = "#33A8E8"
-    ACCENT_MUTED = "#1E3A4D"    # Accent-tinted backgrounds
+    ACCENT = "#6366F1"          # Primary actions, links, active step
+    ACCENT_HOVER = "#818CF8"
+    ACCENT_PRESSED = "#4F46E5"
+    ACCENT_MUTED = "#312E81"    # Accent-tinted backgrounds
 
     # ── Semantic ──────────────────────────────────────────────────
     SUCCESS = "#3DDC84"
@@ -76,11 +76,11 @@ class Typography:
     FAMILY = "'Helvetica Neue', 'Inter', sans-serif"
     FAMILY_MONO = "'Menlo', 'JetBrains Mono', 'SF Mono', monospace"
 
-    SIZE_DISPLAY = 28   # Hero titles
-    SIZE_TITLE = 20     # Page titles
-    SIZE_HEADING = 16   # Section headings
-    SIZE_BODY = 13      # Default body
-    SIZE_CAPTION = 11   # Captions, hints
+    SIZE_DISPLAY = 32   # Hero titles
+    SIZE_TITLE = 24     # Page titles
+    SIZE_HEADING = 18   # Section headings
+    SIZE_BODY = 14      # Default body
+    SIZE_CAPTION = 12   # Captions, hints
 
 
 class Timing:

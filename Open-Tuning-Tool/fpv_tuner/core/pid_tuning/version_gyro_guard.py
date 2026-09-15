@@ -29,7 +29,7 @@ from fpv_tuner.core.pid_tuning.tuning_context import (
 _CONFIG_PATH = Path(__file__).parent / "version_whitelist.json"
 
 _FW_RE = re.compile(r"Betaflight\s+([\w.\-]+)", re.IGNORECASE)
-_GYRO_RE = re.compile(r"Gyro:\s*([A-Za-z0-9\-]+)")
+_GYRO_RE = re.compile(r"(BMI\d+|MPU\d+|ICM\d+|LSM\d+|IIM\-\d+)[A-Za-z0-9\-]*", re.IGNORECASE)
 
 
 def _load_config() -> dict:
@@ -78,7 +78,7 @@ def extract_board(headers: dict) -> tuple[str, str]:
 def parse_status_gyro(text: str) -> Optional[str]:
     """Extract the gyro model from CLI ``status`` output (e.g. ICM42688P)."""
     m = _GYRO_RE.search(text)
-    return m.group(1) if m else None
+    return m.group(0).upper() if m else None
 
 
 def build_tuning_context(
@@ -141,6 +141,8 @@ def build_tuning_context(
 
     # ── Chirp detection ───────────────────────────────────────────
     ctx.chirp_detected = _detect_chirp(headers, debug_mode, cfg)
+    if ctx.chirp_detected:
+        ctx.warnings.append(FLAG_CHIRP_UNSUPPORTED)
 
     return ctx
 

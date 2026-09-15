@@ -16,7 +16,11 @@ from fpv_tuner.core.pid_tuning.step_response_pid import analyze as analyze_pid
 from fpv_tuner.core.pid_tuning.dterm_analyzer import analyze as analyze_dterm
 from fpv_tuner.core.pid_tuning.gyro_filter_analyzer import analyze as analyze_gyro_filter
 from fpv_tuner.core.pid_tuning.rpm_filter_analyzer import analyze as analyze_rpm_filter
+from fpv_tuner.core.pid_tuning.dyn_notch_analyzer import analyze as analyze_dyn_notch
+from fpv_tuner.core.pid_tuning.motor_analyzer import analyze_motor_clipping
 from fpv_tuner.core.pid_tuning.tpa_ezlanding_analyzer import analyze as analyze_tpa
+from fpv_tuner.core.pid_tuning.feedforward_analyzer import analyze as analyze_ff
+from fpv_tuner.core.pid_tuning.complementary_analyzer import analyze as analyze_comp
 from fpv_tuner.core.cli.schema import CliSchema
 from fpv_tuner.core.cli import get_schema
 import pandas as pd
@@ -36,6 +40,7 @@ class PIDTuningAdvisor:
         pids: dict,
         headers: dict,
         gyro_model: Optional[str] = None,
+        mode: str = "ALL"
     ) -> PIDTuningRecommendation:
         """
         Run the full tuning analysis pipeline on a log.
@@ -53,16 +58,31 @@ class PIDTuningAdvisor:
         context = build_tuning_context(headers, gyro_model=gyro_model, schema=self.schema)
 
         sub_recommendations = []
-        sub_recommendations.extend(analyze_pid(df, pids, headers, context, rules))
-        sub_recommendations.extend(analyze_dterm(df, pids, headers, context, rules))
-        sub_recommendations.extend(analyze_gyro_filter(df, pids, headers, context, rules))
-        sub_recommendations.extend(analyze_rpm_filter(df, pids, headers, context, rules))
-        sub_recommendations.extend(analyze_tpa(df, pids, headers, context, rules))
+
+        # -- FILTER STAGE (Phase 1) --
+        if mode in ("ALL", "FILTERS"):
+            sub_recommendations.extend(analyze_dterm(df, pids, headers, context, rules))
+            sub_recommendations.extend(analyze_gyro_filter(df, pids, headers, context, rules))
+            
+            rpm_recs, rpm_state = analyze_rpm_filter(df, pids, headers, context, rules)
+            sub_recommendations.extend(rpm_recs)
+            sub_recommendations.extend(analyze_dyn_notch(df, pids, headers, context, rpm_state, rules))
+
+        # -- PID & FF STAGE (Phase 2) --
+        if mode in ("ALL", "PIDS"):
+            if not context.chirp_detected and context.version_supported:
+                sub_recommendations.extend(analyze_pid(df, pids, headers, context, rules))
+                sub_recommendations.extend(analyze_ff(df, pids, headers, context, rules))
+                sub_recommendations.extend(analyze_tpa(df, pids, headers, context, rules))
+
+        # -- COMPLEMENTARY STAGE (Phase 3) --
+        if mode in ("ALL", "COMPLEMENTARY"):
+            sub_recommendations.extend(analyze_comp(df, pids, headers, context, rules))
 
         return build_prescription(sub_recommendations, context, self.schema)
 
 
-def guess_optimal_pid(df: pd.DataFrame, pids: dict, headers: dict, gyro_model: Optional[str] = None) -> PIDTuningRecommendation:
+def guess_optimal_pid(df: pd.DataFrame, pids: dict, headers: dict, gyro_model: Optional[str] = None, mode: str = "ALL") -> PIDTuningRecommendation:
     """Convenience wrapper for a one-off tuning analysis without a persistent advisor."""
     advisor = PIDTuningAdvisor(schema=get_schema())
-    return advisor.analyze(df, pids, headers, gyro_model=gyro_model)
+    return advisor.analyze(df, pids, headers, gyro_model=gyro_model, mode=mode)
