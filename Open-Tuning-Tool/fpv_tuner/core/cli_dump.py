@@ -129,19 +129,3 @@ def apply_changes(dump: CliDumpData, changes: dict) -> str:
             output_lines.append(f"set {name} = {changes_lower[name]}")
 
     return "\n".join(output_lines)
-
-
-def diff_settings(original: dict, modified: dict) -> list[dict]:
-    """
-    Human-readable diff between two settings dicts.
-
-    Returns a list of {"name", "old", "new"} for changed/added/removed keys.
-    """
-    diff = []
-    all_keys = sorted(set(original) | set(modified))
-    for key in all_keys:
-        old = original.get(key)
-        new = modified.get(key)
-        if old != new:
-            diff.append({"name": key, "old": old, "new": new})
-    return diff

@@ -13,13 +13,20 @@ reduction for flyaway safety).  So this analyser:
 from __future__ import annotations
 
 from fpv_tuner.core.pid_tuning.models import SubRecommendation
-from fpv_tuner.core.pid_tuning.helpers import hget, parse_int
+from fpv_tuner.core.pid_tuning.helpers import hget, parse_int, parse_int_list
 from fpv_tuner.core.pid_tuning.tuning_context import (
     FLAG_REDUCES_FILTERING_RPM_COMPENSATED,
     FLAG_REDUCES_FILTERING_BLOCKED,
 )
-from fpv_tuner.core.pid_tuning.rpm_filter import is_rpm_filter_active
 from fpv_tuner.core.pid_tuning.rule_engine import rstatus
+
+
+def _is_rpm_filter_active(headers: dict) -> bool:
+    """True when the RPM filter is enabled and has at least one active harmonic."""
+    bidir = hget(headers, "dshot_bidir").upper()
+    harmonics = parse_int(hget(headers, "rpm_filter_harmonics"), 0)
+    weights = parse_int_list(hget(headers, "rpm_filter_weights"))
+    return bidir in ("ON", "1") and harmonics > 0 and any(w > 0 for w in weights)
 
 
 def analyze(df, pids, headers, context, rules=None) -> list[SubRecommendation]:
@@ -28,7 +35,7 @@ def analyze(df, pids, headers, context, rules=None) -> list[SubRecommendation]:
     if current <= 0:
         return []  # already disabled
 
-    if not is_rpm_filter_active(headers):
+    if not _is_rpm_filter_active(headers):
         # Hard clamp: without RPM coverage, do not suggest reducing gyro filtering.
         return [SubRecommendation(
             kind="gyro_filter",

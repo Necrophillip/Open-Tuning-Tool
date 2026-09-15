@@ -8,10 +8,9 @@ from typing import Optional
 
 def hget(headers: dict, key: str, default: str = "") -> str:
     """Case-insensitive header lookup."""
-    for k, v in headers.items():
-        if k.lower() == key.lower():
-            return str(v)
-    return default
+    key_lower = key.lower()
+    v = headers.get(key) or headers.get(key_lower)
+    return str(v) if v is not None else default
 
 
 def parse_int(value, default: int = 0) -> int:

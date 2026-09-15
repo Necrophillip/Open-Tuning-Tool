@@ -81,8 +81,3 @@ class PIDTuningAdvisor:
 
         return build_prescription(sub_recommendations, context, self.schema)
 
-
-def guess_optimal_pid(df: pd.DataFrame, pids: dict, headers: dict, gyro_model: Optional[str] = None, mode: str = "ALL") -> PIDTuningRecommendation:
-    """Convenience wrapper for a one-off tuning analysis without a persistent advisor."""
-    advisor = PIDTuningAdvisor(schema=get_schema())
-    return advisor.analyze(df, pids, headers, gyro_model=gyro_model, mode=mode)
