@@ -86,6 +86,7 @@ def compute_step_response_summary(df: pd.DataFrame, axis_name: str, pids: dict =
     metrics = analysis.get("metrics", {})
     t_seg = analysis.get("t_segment")
     y_seg = analysis.get("y_segment")
+    u_seg = analysis.get("u_segment")
     if t_seg is None or y_seg is None or len(t_seg) == 0:
         return None
 
@@ -97,15 +98,32 @@ def compute_step_response_summary(df: pd.DataFrame, axis_name: str, pids: dict =
 
     t = np.asarray(t_seg, dtype=float)
     t = t - t[0]
+    
     response = (np.asarray(y_seg, dtype=float) - y0) / step_amp
     response = np.nan_to_num(response, nan=0.0, posinf=0.0, neginf=0.0)
+    
+    u0 = np.mean(u_seg[:max(1, int(0.05 * len(u_seg)))]) if u_seg is not None else 0
+    setpoint = (np.asarray(u_seg, dtype=float) - u0) / step_amp if u_seg is not None else np.ones_like(t)
+
+    overshoot = max(0.0, float(np.max(response) - 1.0)) * 100.0
+    zeta = metrics.get("zeta")
+    is_first_order = metrics.get("model") == "first-order"
+    
+    if is_first_order:
+        system_type = "Overdamped"
+    elif zeta is not None:
+        system_type = "Underdamped" if zeta < 0.99 else "Overdamped"
+    else:
+        system_type = "Unknown"
 
     return {
         "t": t,
         "response": response,
-        "overshoot_pct": float(metrics.get("overshoot_pct", 0.0) or 0.0),
-        "rise_time_s": metrics.get("rise_time_s"),
-        "settling_time_s": metrics.get("settling_time_s"),
+        "setpoint": setpoint,
+        "type": system_type,
+        "overshoot_pct": overshoot,
+        "rise_time_ms": (metrics.get("rise_time_s") or 0.0) * 1000.0,
+        "delay_ms": (metrics.get("time_delay_s") or 0.0) * 1000.0,
     }
 
 
@@ -119,6 +137,9 @@ def compute_noise_heatmap(df: pd.DataFrame, axis_name: str, n_throttle_bins: int
     idx = AXES.index(axis_name)
     time_col = _find_time_col(df)
     noise_col = f"{col_prefix}[{idx}]"
+    if noise_col not in df.columns:
+        alt_prefix = "dTerm" if col_prefix == "axisD" else "axisD"
+        noise_col = f"{alt_prefix}[{idx}]"
     throttle_col = next((c for c in df.columns if "rccommand" in c.lower() and "3" in c), None)
     if throttle_col is None:
         throttle_col = next((c for c in df.columns if c == "motor[0]"), None)

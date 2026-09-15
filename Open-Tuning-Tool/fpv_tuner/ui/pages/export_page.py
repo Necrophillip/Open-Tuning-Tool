@@ -7,7 +7,7 @@ apply them (write to FC / copy / show the generated CLI commands).
 """
 from PyQt6.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QPlainTextEdit,
-    QMessageBox, QWidget, QComboBox, QDialog,
+    QMessageBox, QWidget, QComboBox, QDialog, QTabWidget,
 )
 from PyQt6.QtCore import Qt
 
@@ -54,100 +54,55 @@ class ExportPage(WizardPage):
         super().__init__(state, parent)
 
     def _build_ui(self):
-        from PyQt6.QtWidgets import QScrollArea, QFrame, QWidget
-        main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(0, 0, 0, 0)
-        
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setStyleSheet("QScrollArea { background: transparent; } QWidget#scroll_content { background: transparent; }")
-        
-        content = QWidget()
-        content.setObjectName("scroll_content")
-        layout = QVBoxLayout(content)
+        layout = QVBoxLayout(self)
         layout.setContentsMargins(Spacing.LG, Spacing.MD, Spacing.LG, Spacing.MD)
         layout.setSpacing(Spacing.SM)
-        
-        scroll.setWidget(content)
-        main_layout.addWidget(scroll)
 
         layout.addWidget(self._make_title("Export & Apply"))
         layout.addWidget(self._make_subtitle(
             "Review the analysis, then apply the recommended changes to your quad."
         ))
 
-        # ── Step response (3 axes) ─────────────────────────────────
-        layout.addWidget(_section_label("📈  Step Response"))
-        step_row = QHBoxLayout()
-        step_row.setSpacing(Spacing.SM)
+        self.tabs = QTabWidget()
+        layout.addWidget(self.tabs, 1)
+
+        # Tab 1: Step Response
+        step_tab = QWidget()
+        step_layout = QHBoxLayout(step_tab)
+        step_layout.setSpacing(Spacing.SM)
         self._step_plots = {}
         for axis in ("roll", "pitch", "yaw"):
-            plot = pg.PlotWidget()
-            plot.setTitle(axis.capitalize())
+            plot = pg.PlotWidget(title=axis.capitalize())
             plot.setLabel("bottom", "Time (s)")
             plot.setLabel("left", "Normalized")
             plot.showGrid(x=True, y=True, alpha=0.2)
             plot.setDownsampling(auto=True, mode="peak")
+            plot.addLegend(offset=(10, 10))
             self._step_plots[axis] = plot
-            step_row.addWidget(plot)
-        layout.addLayout(step_row, 2)
+            step_layout.addWidget(plot)
+        self.tabs.addTab(step_tab, "📈 Step Response")
 
-        # ── Gyro Noise Heatmap ─────────────────────────────────────
-        layout.addWidget(_section_label("🔥 Gyro Noise Heatmap"))
-        gyro_row = QHBoxLayout()
-        gyro_row.setSpacing(Spacing.SM)
-        self._gyro_views = {}
-        for axis in ("roll", "pitch", "yaw"):
-            plot_item = pg.PlotItem(title="")
-            plot_item.setLabel("bottom", "Throttle (%)")
-            plot_item.setLabel("left", "Frequency (Hz)")
-            view = pg.ImageView(view=plot_item)
-            view.setColorMap(_make_thermal_colormap())
-            view.ui.histogram.hide()
-            view.ui.roiBtn.hide()
-            view.ui.menuBtn.hide()
-            view.setMinimumHeight(200)
-            view.getView().invertY(False)
-            self._gyro_views[axis] = view
-            gyro_row.addWidget(view)
-        layout.addLayout(gyro_row, 2)
+        # Helper for Tabs 2 & 3
+        def _make_heatmap_tab(label):
+            tab = QWidget()
+            t_layout = QHBoxLayout(tab)
+            t_layout.setSpacing(Spacing.SM)
+            views = {}
+            for axis in ("roll", "pitch", "yaw"):
+                plot = pg.PlotWidget(title=axis.capitalize())
+                plot.setLabel("bottom", "Throttle (%)")
+                plot.setLabel("left", "Frequency (Hz)")
+                plot.showGrid(x=True, y=True, alpha=0.2)
+                img = pg.ImageItem()
+                img.setColorMap(_make_thermal_colormap())
+                plot.addItem(img)
+                views[axis] = (plot, img)
+                t_layout.addWidget(plot)
+            self.tabs.addTab(tab, label)
+            return views
 
-        # ── D-Term Noise Heatmap ───────────────────────────────────
-        layout.addWidget(_section_label("🔥 D-Term Noise Heatmap"))
-        dterm_row = QHBoxLayout()
-        dterm_row.setSpacing(Spacing.SM)
-        self._dterm_views = {}
-        for axis in ("roll", "pitch", "yaw"):
-            plot_item = pg.PlotItem(title="")
-            plot_item.setLabel("bottom", "Throttle (%)")
-            plot_item.setLabel("left", "Frequency (Hz)")
-            view = pg.ImageView(view=plot_item)
-            view.setColorMap(_make_thermal_colormap())
-            view.ui.histogram.hide()
-            view.ui.roiBtn.hide()
-            view.ui.menuBtn.hide()
-            view.setMinimumHeight(200)
-            view.getView().invertY(False)
-            self._dterm_views[axis] = view
-            dterm_row.addWidget(view)
-        layout.addLayout(dterm_row, 2)
-
-        # ── RPM Filter Harmonics ───────────────────────────────────
-        layout.addWidget(_section_label("🎵 RPM Filter Harmonics"))
-        harm_row = QHBoxLayout()
-        harm_row.setSpacing(Spacing.SM)
-        self._harm_plots = {}
-        for axis in ("roll", "pitch", "yaw"):
-            plot = pg.PlotWidget()
-            plot.setTitle(axis.capitalize())
-            plot.setLabel("bottom", "Throttle (%)")
-            plot.setLabel("left", "Frequency (Hz)")
-            plot.showGrid(x=True, y=True, alpha=0.2)
-            plot.setMinimumHeight(200)
-            self._harm_plots[axis] = plot
-            harm_row.addWidget(plot)
-        layout.addLayout(harm_row, 2)
+        self._gyro_views = _make_heatmap_tab("🔥 Gyro Noise")
+        self._dterm_views = _make_heatmap_tab("🔥 D-Term Noise")
 
         # ── Changes summary (compact) ──────────────────────────────
         self.changes_label = QLabel("No changes recommended yet.")
@@ -208,12 +163,27 @@ class ExportPage(WizardPage):
             if not data:
                 plot.setTitle(f"{axis.capitalize()} (no data)")
                 continue
-            plot.plot(data["t"], data["response"], pen=pg.mkPen("#42A5F5", width=2))
-            plot.addItem(pg.InfiniteLine(pos=1.0, angle=0, pen=pg.mkPen("white", width=1,
-                         style=Qt.PenStyle.DashLine)))
-            title = axis.capitalize()
-            if data.get("overshoot_pct") is not None:
-                title += f"  ·  {data['overshoot_pct']:.0f}% overshoot"
+            # 1. Y=1 Target Reference Line (native plot trace so it gets a legend entry)
+            t_min, t_max = data["t"][0], data["t"][-1]
+            plot.plot([t_min, t_max], [1.0, 1.0], name="Target", pen=pg.mkPen("#00E676", width=1, style=Qt.PenStyle.DashLine))
+            
+            # 2. RC Command (Setpoint)
+            if "setpoint" in data:
+                plot.plot(data["t"], data["setpoint"], name="RC Cmd", pen=pg.mkPen(color=(255, 255, 255, 120), width=1, style=Qt.PenStyle.DotLine))
+                
+            # 3. Response Signal
+            plot.plot(data["t"], data["response"], name="Response", pen=pg.mkPen("#FF9100", width=2))
+            
+            # 4. Clean HTML Title
+            sys_type = data.get('type', 'Unknown')
+            os_pct = data.get('overshoot_pct', 0)
+            title = (
+                f"<div style='text-align: center;'>"
+                f"<span style='color: #FFFFFF; font-size: 12pt; font-weight: bold;'>{axis.upper()}</span><br>"
+                f"<span style='color: #B0BEC5; font-size: 9pt;'>"
+                f"{sys_type} | OS: {os_pct:.0f}% | Rise: {data.get('rise_time_ms', 0):.0f}ms | Dly: {data.get('delay_ms', 0):.0f}ms"
+                f"</span></div>"
+            )
             plot.setTitle(title)
             
         gyro_heatmaps = getattr(analysis, "heatmaps", {})
@@ -221,68 +191,35 @@ class ExportPage(WizardPage):
         
         self._update_heatmaps(self._gyro_views, gyro_heatmaps)
         self._update_heatmaps(self._dterm_views, dterm_heatmaps)
-        self._render_harmonics(self._harm_plots, gyro_heatmaps)
 
     def _update_heatmaps(self, views, heatmaps):
-        for axis, view in views.items():
-            view.getView().clear()
+        for axis, (plot, img) in views.items():
+            for item in plot.listDataItems():
+                plot.removeItem(item)
+                
             data = heatmaps.get(axis)
             if not data:
-                view.getView().setTitle(f"{axis.capitalize()} (No data)")
-                view.clear()
+                plot.setTitle(f"{axis.capitalize()} (No data)")
+                img.clear()
                 continue
                 
-            view.getView().setTitle("")
+            plot.setTitle(axis.capitalize())
             hm = data["heatmap"]
-            img = hm.T
+            img_data = hm.T
             freq_max = data["freq"][-1]
             
-            tr = pg.QtGui.QTransform()
-            tr.scale(100.0 / img.shape[0], freq_max / img.shape[1])
-            
-            v_min, v_max = np.nanmin(img), np.nanpercentile(img, 99.5)
+            v_min, v_max = np.nanmin(img_data), np.nanpercentile(img_data, 99.5)
             if np.isnan(v_max) or v_min == v_max: v_max = v_min + 1
             
-            view.setImage(img, autoRange=False, levels=(v_min, v_max), transform=tr)
+            img.setImage(img_data, autoLevels=False, levels=(v_min, v_max))
+            img.setRect(pg.QtCore.QRectF(0, 0, 100.0, freq_max))
             
-            mean_val = np.nanmean(img)
-            peak_val = np.nanmax(img)
-            
-            axis_label = pg.TextItem(axis, color=(255, 255, 255), anchor=(0, 0))
-            axis_label.setPos(2, freq_max - (freq_max * 0.05))
-            view.getView().addItem(axis_label)
-            
-            stats_label = pg.TextItem(f"mean={mean_val:.3f}\npeak={peak_val:.3f}", color=(255, 255, 255), anchor=(1, 0))
-            stats_label.setPos(98, freq_max - (freq_max * 0.05))
-            view.getView().addItem(stats_label)
-            
-            view.getView().setLimits(xMin=0, xMax=100, yMin=0, yMax=freq_max)
-            view.getView().setXRange(0, 100, padding=0)
-            view.getView().setYRange(0, freq_max, padding=0)
-            
-            x_ax = view.getView().getAxis("bottom")
-            x_ax.setTicks([[(i, str(i)) for i in range(0, 101, 20)]])
-            y_ax = view.getView().getAxis("left")
-            y_ax.setTicks([[(i, str(i)) for i in range(0, int(freq_max) + 1, 200)]])
-
-    def _render_harmonics(self, plots, heatmaps):
-        for axis, plot in plots.items():
-            plot.clear()
-            data = heatmaps.get(axis)
-            if not data or "h1" not in data:
-                plot.setTitle(f"{axis.capitalize()} (No data)")
-                continue
-                
-            plot.setTitle(f"{axis.capitalize()}")
-            tc = data["throttle"]
+            # Overlay harmonics
             colors = ["#00ffff", "#ffaa00", "#ffff00"]
-            names = ["H1 (Fundamental)", "H2 (2x)", "H3 (3x)"]
-            
-            for i, h_key in enumerate(["h1", "h2", "h3"]):
-                if h_key in data:
-                    plot.plot(tc, data[h_key], name=names[i], pen=pg.mkPen(colors[i], width=2))
+            for i, h in enumerate(["h1", "h2", "h3"]):
+                if h in data:
+                    plot.plot(data["throttle"], data[h], pen=pg.mkPen(colors[i], width=2, style=Qt.PenStyle.DashLine))
                     
-            freq_max = data["freq"][-1]
             plot.setLimits(xMin=0, xMax=100, yMin=0, yMax=freq_max)
             plot.setXRange(0, 100, padding=0)
             plot.setYRange(0, freq_max, padding=0)

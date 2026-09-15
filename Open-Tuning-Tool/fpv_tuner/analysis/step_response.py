@@ -186,7 +186,7 @@ def _first_order_step_response(t, K, tau, td, y0):
     return y
 
 
-def analyze_step_response(time_us, rc_command, output_signal, pid_loop_hz=400, plot=True, return_fit_curve=True, motor_signals=None):
+def analyze_step_response(time_us, rc_command, output_signal, pid_loop_hz=400, plot=True, return_fit_curve=True, motor_signals=None, step_threshold=300):
     """Analyze and fit a step response for a single detected step region.
 
     - Resamples signals to a suitable fs (at least pid_loop_hz*4 when logs are sparse).
@@ -241,11 +241,25 @@ def analyze_step_response(time_us, rc_command, output_signal, pid_loop_hz=400, p
                         clipped = True
                         break
         
+        # --- NUEVO: chequeo de escalón único ---
+        dirty_window = False
+        secondary_step_idx = None
+        if not clipped:
+            secondary_threshold = step_threshold * 0.5 
+            du_after = du[idx:post]
+            secondary_candidates = np.where(du_after > secondary_threshold)[0]
+            if len(secondary_candidates) > 0:
+                dirty_window = True
+                secondary_step_idx = idx + secondary_candidates[0]
+
         if clipped:
-            # Zero out this peak and try the next one
             zero_pre = int(max(0, idx - int(0.2 * pid_loop_hz)))
             zero_post = int(min(len(du)-1, idx + int(0.2 * pid_loop_hz)))
             du[zero_pre:zero_post+1] = 0
+        elif dirty_window:
+            post = max(idx + max(2, int(0.05 * pid_loop_hz)), secondary_step_idx - 1)
+            found_valid_step = True
+            break
         else:
             found_valid_step = True
             break
@@ -356,7 +370,7 @@ def analyze_step_response(time_us, rc_command, output_signal, pid_loop_hz=400, p
                 }
 
                 result = {'metrics': metrics, 'params': {'K':Kf, 'tau':tau_f, 'td':td_f, 'y0':y0f},
-                          't_fit': t_fit, 'y_fit': y_fit, 't_segment': t_seg - t_seg[0], 'y_segment': y_seg}
+                          't_fit': t_fit, 'y_fit': y_fit, 't_segment': t_seg - t_seg[0], 'y_segment': y_seg, 'u_segment': u_seg}
                 return result
             except Exception:
                 # if first-order also fails, continue with second-order result
@@ -392,7 +406,7 @@ def analyze_step_response(time_us, rc_command, output_signal, pid_loop_hz=400, p
             }
 
             result = {'metrics': metrics, 'params': {'K':Kf, 'tau':tau_f, 'td':td_f, 'y0':y0f},
-                      't_fit': t_fit, 'y_fit': y_fit, 't_segment': t_seg - t_seg[0], 'y_segment': y_seg}
+                      't_fit': t_fit, 'y_fit': y_fit, 't_segment': t_seg - t_seg[0], 'y_segment': y_seg, 'u_segment': u_seg}
             return result
         except Exception:
             # fallback: compute simple metrics without fit
@@ -459,6 +473,6 @@ def analyze_step_response(time_us, rc_command, output_signal, pid_loop_hz=400, p
 
     result = {'metrics': metrics, 'params': {'K':K_fit, 'wn':wn_fit, 'zeta':zeta_fit, 'td':td_fit, 'y0':y0_fit}}
     if return_fit_curve:
-        result.update({'t_fit': t_fit, 'y_fit': y_fit, 't_segment': t_seg - t_seg[0], 'y_segment': y_seg})
+        result.update({'t_fit': t_fit, 'y_fit': y_fit, 't_segment': t_seg - t_seg[0], 'y_segment': y_seg, 'u_segment': u_seg})
 
     return result
